@@ -66,6 +66,7 @@ struct ContentView: View {
             } message: {
                 Text("Use workspaces to group recordings from a meeting, project, or idea.")
             }
+            .task { migrateLegacyRecordingPaths() }
         }
     }
 
@@ -90,13 +91,25 @@ struct ContentView: View {
             let descriptor = FetchDescriptor<NoteEntity>(predicate: #Predicate { $0.workspaceID == id })
             if let notes = try? modelContext.fetch(descriptor) {
                 for note in notes {
-                    if let path = note.audioPath { try? FileManager.default.removeItem(atPath: path) }
+                    RecordingFileStore.delete(note.audioPath)
                     modelContext.delete(note)
                 }
             }
             modelContext.delete(workspace)
         }
         try? modelContext.save()
+    }
+
+    private func migrateLegacyRecordingPaths() {
+        guard let notes = try? modelContext.fetch(FetchDescriptor<NoteEntity>()) else { return }
+        var changed = false
+        for note in notes {
+            guard let storedPath = note.audioPath, storedPath.hasPrefix("/"),
+                  let currentURL = RecordingFileStore.resolve(storedPath) else { continue }
+            note.audioPath = RecordingFileStore.storedValue(for: currentURL)
+            changed = true
+        }
+        if changed { try? modelContext.save() }
     }
 }
 
@@ -214,7 +227,7 @@ private struct WorkspaceView: View {
                     summary: result.summary,
                     todo: result.todos.isEmpty ? nil : result.todos.joined(separator: "\n"),
                     timeLabel: Date.now.formatted(date: .omitted, time: .shortened),
-                    audioPath: result.audioURL.path,
+                    audioPath: RecordingFileStore.storedValue(for: result.audioURL),
                     sortOrder: notes.count
                 )
                 modelContext.insert(note)
@@ -256,7 +269,7 @@ private struct VoiceNoteCard: View {
         self.note = note
         self.pipeline = pipeline
         self.onChange = onChange
-        _audioPlayer = StateObject(wrappedValue: NoteAudioPlayer(path: note.audioPath))
+        _audioPlayer = StateObject(wrappedValue: NoteAudioPlayer(url: RecordingFileStore.resolve(note.audioPath)))
     }
 
     var body: some View {
@@ -355,7 +368,7 @@ private struct VoiceNoteCard: View {
     }
 
     private func deleteNote() {
-        if let path = note.audioPath { try? FileManager.default.removeItem(atPath: path) }
+        RecordingFileStore.delete(note.audioPath)
         modelContext.delete(note)
         try? modelContext.save()
         onChange()
@@ -372,8 +385,8 @@ private final class NoteAudioPlayer: NSObject, ObservableObject, AVAudioPlayerDe
     private var player: AVAudioPlayer?
     private var timer: Timer?
 
-    init(path: String?) {
-        url = path.map { URL(fileURLWithPath: $0) }
+    init(url: URL?) {
+        self.url = url
         super.init()
         prepare()
     }

@@ -2,6 +2,39 @@
 import Foundation
 import SwiftData
 
+enum RecordingFileStore {
+    private static var directory: URL {
+        FileManager.default.urls(for: .applicationSupportDirectory, in: .userDomainMask)[0]
+            .appendingPathComponent("Recordings", isDirectory: true)
+    }
+
+    /// Persist only the filename. Absolute sandbox paths contain a container UUID
+    /// that may change when Xcode reinstalls the app.
+    static func storedValue(for url: URL) -> String {
+        url.lastPathComponent
+    }
+
+    static func resolve(_ storedValue: String?) -> URL? {
+        guard let storedValue, !storedValue.isEmpty else { return nil }
+
+        // Keep compatibility with an existing absolute path while it is valid.
+        if storedValue.hasPrefix("/"), FileManager.default.fileExists(atPath: storedValue) {
+            return URL(fileURLWithPath: storedValue)
+        }
+
+        // For stale absolute paths and new filename-only records, rebuild the URL
+        // inside the app's current data container.
+        let filename = URL(fileURLWithPath: storedValue).lastPathComponent
+        let currentURL = directory.appendingPathComponent(filename)
+        return FileManager.default.fileExists(atPath: currentURL.path) ? currentURL : nil
+    }
+
+    static func delete(_ storedValue: String?) {
+        guard let url = resolve(storedValue) else { return }
+        try? FileManager.default.removeItem(at: url)
+    }
+}
+
 @Model
 final class WorkspaceEntity {
     @Attribute(.unique) var id: UUID
@@ -110,7 +143,7 @@ final class LocalPersistenceStore {
                             summary: $0.summary,
                             todo: $0.todo,
                             time: $0.timeLabel,
-                            audioURL: $0.audioPath.map { URL(fileURLWithPath: $0) }
+                            audioURL: RecordingFileStore.resolve($0.audioPath)
                         )
                     }
             )
@@ -137,7 +170,7 @@ final class LocalPersistenceStore {
                     summary: note.summary,
                     todo: note.todo,
                     timeLabel: note.time,
-                    audioPath: note.audioURL?.path,
+                    audioPath: note.audioURL.map(RecordingFileStore.storedValue),
                     sortOrder: noteIndex
                 ))
             }
