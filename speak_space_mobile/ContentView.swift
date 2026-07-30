@@ -2,6 +2,9 @@ import SwiftData
 import SwiftUI
 
 #if os(iOS)
+import AVFoundation
+import Combine
+
 struct ContentView: View {
     @Environment(\.modelContext) private var modelContext
     @Query(sort: \WorkspaceEntity.sortOrder) private var workspaces: [WorkspaceEntity]
@@ -243,6 +246,18 @@ private struct VoiceNoteCard: View {
     let onChange: () -> Void
     @State private var generating: NoteGenerationType?
     @State private var errorMessage: String?
+    @StateObject private var audioPlayer: NoteAudioPlayer
+
+    init(
+        note: NoteEntity,
+        pipeline: OnDevicePipeline,
+        onChange: @escaping () -> Void
+    ) {
+        self.note = note
+        self.pipeline = pipeline
+        self.onChange = onChange
+        _audioPlayer = StateObject(wrappedValue: NoteAudioPlayer(path: note.audioPath))
+    }
 
     var body: some View {
         VStack(alignment: .leading, spacing: 12) {
@@ -265,6 +280,10 @@ private struct VoiceNoteCard: View {
                 .font(.body)
                 .textSelection(.enabled)
 
+            if note.audioPath != nil {
+                audioControls
+            }
+
             if let summary = note.summary {
                 creation(title: "Summary", icon: "sparkles", text: summary)
             }
@@ -284,9 +303,32 @@ private struct VoiceNoteCard: View {
         .background(.background, in: RoundedRectangle(cornerRadius: 18))
         .overlay(RoundedRectangle(cornerRadius: 18).stroke(.quaternary))
         .shadow(color: .black.opacity(0.04), radius: 8, y: 3)
+        .onDisappear { audioPlayer.stop() }
         .alert("Couldn’t create content", isPresented: Binding(
             get: { errorMessage != nil }, set: { if !$0 { errorMessage = nil } }
         )) { Button("OK", role: .cancel) {} } message: { Text(errorMessage ?? "") }
+    }
+
+    private var audioControls: some View {
+        HStack(spacing: 12) {
+            Button {
+                audioPlayer.toggle()
+            } label: {
+                Image(systemName: audioPlayer.isPlaying ? "pause.fill" : "play.fill")
+                    .frame(width: 30, height: 30)
+                    .background(.tint.opacity(0.12), in: Circle())
+            }
+            .buttonStyle(.plain)
+            .accessibilityLabel(audioPlayer.isPlaying ? "Pause recording" : "Play recording")
+
+            ProgressView(value: audioPlayer.progress)
+                .tint(.accentColor)
+
+            Text(audioPlayer.timeLabel)
+                .font(.caption.monospacedDigit())
+                .foregroundStyle(.secondary)
+        }
+        .padding(.vertical, 4)
     }
 
     private func creation(title: String, icon: String, text: String) -> some View {
@@ -317,6 +359,94 @@ private struct VoiceNoteCard: View {
         modelContext.delete(note)
         try? modelContext.save()
         onChange()
+    }
+}
+
+@MainActor
+private final class NoteAudioPlayer: NSObject, ObservableObject, AVAudioPlayerDelegate {
+    @Published private(set) var isPlaying = false
+    @Published private(set) var progress = 0.0
+    @Published private(set) var timeLabel = "0:00"
+
+    private let url: URL?
+    private var player: AVAudioPlayer?
+    private var timer: Timer?
+
+    init(path: String?) {
+        url = path.map { URL(fileURLWithPath: $0) }
+        super.init()
+        prepare()
+    }
+
+    func toggle() {
+        if isPlaying { pause() } else { play() }
+    }
+
+    func stop() {
+        player?.stop()
+        player?.currentTime = 0
+        isPlaying = false
+        updateProgress()
+        stopTimer()
+        try? AVAudioSession.sharedInstance().setActive(false, options: .notifyOthersOnDeactivation)
+    }
+
+    private func prepare() {
+        guard let url, FileManager.default.fileExists(atPath: url.path) else { return }
+        player = try? AVAudioPlayer(contentsOf: url)
+        player?.delegate = self
+        player?.prepareToPlay()
+        updateProgress()
+    }
+
+    private func play() {
+        if player == nil { prepare() }
+        guard let player else { return }
+        do {
+            let session = AVAudioSession.sharedInstance()
+            try session.setCategory(.playback, mode: .spokenAudio)
+            try session.setActive(true)
+            guard player.play() else { return }
+            isPlaying = true
+            startTimer()
+        } catch {
+            isPlaying = false
+        }
+    }
+
+    private func pause() {
+        player?.pause()
+        isPlaying = false
+        updateProgress()
+        stopTimer()
+    }
+
+    private func startTimer() {
+        stopTimer()
+        timer = Timer.scheduledTimer(withTimeInterval: 0.2, repeats: true) { [weak self] _ in
+            Task { @MainActor in self?.updateProgress() }
+        }
+    }
+
+    private func stopTimer() {
+        timer?.invalidate()
+        timer = nil
+    }
+
+    private func updateProgress() {
+        guard let player else { return }
+        progress = player.duration > 0 ? player.currentTime / player.duration : 0
+        let seconds = max(0, Int(player.currentTime.rounded()))
+        timeLabel = String(format: "%d:%02d", seconds / 60, seconds % 60)
+    }
+
+    nonisolated func audioPlayerDidFinishPlaying(_ player: AVAudioPlayer, successfully flag: Bool) {
+        Task { @MainActor in
+            self.isPlaying = false
+            self.stopTimer()
+            self.updateProgress()
+            try? AVAudioSession.sharedInstance().setActive(false, options: .notifyOthersOnDeactivation)
+        }
     }
 }
 
