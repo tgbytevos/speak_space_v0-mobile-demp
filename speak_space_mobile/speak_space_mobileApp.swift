@@ -12,7 +12,8 @@ import SwiftData
 struct speak_space_mobileApp: App {
     var sharedModelContainer: ModelContainer = {
         let schema = Schema([
-            Item.self,
+            WorkspaceEntity.self,
+            NoteEntity.self,
         ])
         let modelConfiguration = ModelConfiguration(schema: schema, isStoredInMemoryOnly: false)
 
