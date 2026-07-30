@@ -259,6 +259,8 @@ private struct VoiceNoteCard: View {
     let onChange: () -> Void
     @State private var generating: NoteGenerationType?
     @State private var errorMessage: String?
+    @State private var isEditing = false
+    @State private var transcriptDraft: String
     @StateObject private var audioPlayer: NoteAudioPlayer
 
     init(
@@ -269,6 +271,7 @@ private struct VoiceNoteCard: View {
         self.note = note
         self.pipeline = pipeline
         self.onChange = onChange
+        _transcriptDraft = State(initialValue: note.content)
         _audioPlayer = StateObject(wrappedValue: NoteAudioPlayer(url: RecordingFileStore.resolve(note.audioPath)))
     }
 
@@ -280,6 +283,7 @@ private struct VoiceNoteCard: View {
                     .foregroundStyle(.secondary)
                 Spacer()
                 Menu {
+                    Button("Edit Transcript", systemImage: "pencil") { beginEditing() }
                     Button("Create Summary", systemImage: "text.alignleft") { generate(.summary) }
                     Button("Create To-do", systemImage: "checklist") { generate(.todo) }
                     Divider()
@@ -289,12 +293,33 @@ private struct VoiceNoteCard: View {
                 }
             }
 
-            Text(note.content)
-                .font(.body)
-                .textSelection(.enabled)
-
             if note.audioPath != nil {
                 audioControls
+            }
+
+            if isEditing {
+                VStack(spacing: 10) {
+                    TextEditor(text: $transcriptDraft)
+                        .font(.body)
+                        .frame(minHeight: 110)
+                        .padding(8)
+                        .scrollContentBackground(.hidden)
+                        .background(.secondary.opacity(0.08), in: RoundedRectangle(cornerRadius: 10))
+
+                    HStack {
+                        Spacer()
+                        Button("Cancel") { cancelEditing() }
+                        Button("Save") { saveTranscript() }
+                            .buttonStyle(.borderedProminent)
+                            .disabled(transcriptDraft.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty)
+                    }
+                }
+            } else {
+                Text(note.content)
+                    .font(.body)
+                    .textSelection(.enabled)
+                    .contentShape(Rectangle())
+                    .onTapGesture(count: 2) { beginEditing() }
             }
 
             if let summary = note.summary {
@@ -323,25 +348,47 @@ private struct VoiceNoteCard: View {
     }
 
     private var audioControls: some View {
-        HStack(spacing: 12) {
+        HStack(spacing: 7) {
             Button {
                 audioPlayer.toggle()
             } label: {
                 Image(systemName: audioPlayer.isPlaying ? "pause.fill" : "play.fill")
-                    .frame(width: 30, height: 30)
+                    .font(.caption.weight(.bold))
+                    .foregroundStyle(.tint)
+                    .frame(width: 26, height: 26)
                     .background(.tint.opacity(0.12), in: Circle())
             }
             .buttonStyle(.plain)
             .accessibilityLabel(audioPlayer.isPlaying ? "Pause recording" : "Play recording")
-
-            ProgressView(value: audioPlayer.progress)
-                .tint(.accentColor)
-
             Text(audioPlayer.timeLabel)
                 .font(.caption.monospacedDigit())
                 .foregroundStyle(.secondary)
+            Spacer()
         }
-        .padding(.vertical, 4)
+    }
+
+    private func beginEditing() {
+        transcriptDraft = note.content
+        isEditing = true
+    }
+
+    private func cancelEditing() {
+        transcriptDraft = note.content
+        isEditing = false
+    }
+
+    private func saveTranscript() {
+        let trimmed = transcriptDraft.trimmingCharacters(in: .whitespacesAndNewlines)
+        guard !trimmed.isEmpty else { return }
+        note.content = trimmed
+        do {
+            try modelContext.save()
+            transcriptDraft = trimmed
+            isEditing = false
+            onChange()
+        } catch {
+            errorMessage = error.localizedDescription
+        }
     }
 
     private func creation(title: String, icon: String, text: String) -> some View {
