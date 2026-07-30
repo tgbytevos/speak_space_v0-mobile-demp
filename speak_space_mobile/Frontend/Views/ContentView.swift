@@ -13,6 +13,7 @@ struct ContentView: View {
     @State private var showingNewWorkspace = false
     @State private var showingModels = false
     @State private var newWorkspaceTitle = ""
+    @AppStorage("isDarkMode") private var isDarkMode = false
 
     var body: some View {
         NavigationStack {
@@ -50,6 +51,12 @@ struct ContentView: View {
                     .accessibilityLabel("Local AI models")
                 }
                 ToolbarItem(placement: .topBarTrailing) {
+                    Button { isDarkMode.toggle() } label: {
+                        Image(systemName: isDarkMode ? "sun.max.fill" : "moon.fill")
+                    }
+                    .accessibilityLabel(isDarkMode ? "Use light mode" : "Use dark mode")
+                }
+                ToolbarItem(placement: .topBarTrailing) {
                     Button { showingNewWorkspace = true } label: {
                         Image(systemName: "plus")
                     }
@@ -68,6 +75,7 @@ struct ContentView: View {
             }
             .task { migrateLegacyRecordingPaths() }
         }
+        .preferredColorScheme(isDarkMode ? .dark : .light)
     }
 
     private func createWorkspace() {
@@ -570,7 +578,7 @@ private struct ModelLibraryView: View {
     @ViewBuilder private func controls(for model: LocalModelDescriptor) -> some View {
         switch manager.state(for: model) {
         case .notInstalled, .failed:
-            Button("Download for offline summaries") { manager.download(model) }
+            Button("Donload Offline Model") { manager.download(model) }
         case .downloading:
             ProgressView(value: progress(for: model))
             Button("Cancel", role: .destructive) { manager.cancelDownload() }
