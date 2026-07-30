@@ -201,11 +201,11 @@
 			);
 			mainGroup = E2E31EE1301B4EC50057E4C1;
 			minimizedProjectReferenceProxies = 1;
-			preferredProjectObjectVersion = 77;
-			productRefGroup = E2E31EEB301B4EC50057E4C1 /* Products */;
 			packageReferences = (
 				AA0000020000000000000002 /* XCLocalSwiftPackageReference "Packages/LlamaRuntime" */,
 			);
+			preferredProjectObjectVersion = 77;
+			productRefGroup = E2E31EEB301B4EC50057E4C1 /* Products */;
 			projectDirPath = "";
 			projectRoot = "";
 			targets = (
@@ -276,20 +276,6 @@
 			targetProxy = E2E31F04301B4EC70057E4C1 /* PBXContainerItemProxy */;
 		};
 /* End PBXTargetDependency section */
-
-/* Begin XCLocalSwiftPackageReference section */
-		AA0000020000000000000002 /* XCLocalSwiftPackageReference "Packages/LlamaRuntime" */ = {
-			isa = XCLocalSwiftPackageReference;
-			relativePath = Packages/LlamaRuntime;
-		};
-/* End XCLocalSwiftPackageReference section */
-
-/* Begin XCSwiftPackageProductDependency section */
-		AA0000030000000000000003 /* LlamaFramework */ = {
-			isa = XCSwiftPackageProductDependency;
-			productName = LlamaFramework;
-		};
-/* End XCSwiftPackageProductDependency section */
 
 /* Begin XCBuildConfiguration section */
 		E2E31F0B301B4EC70057E4C1 /* Debug */ = {
@@ -634,6 +620,20 @@
 			defaultConfigurationName = Release;
 		};
 /* End XCConfigurationList section */
+
+/* Begin XCLocalSwiftPackageReference section */
+		AA0000020000000000000002 /* XCLocalSwiftPackageReference "Packages/LlamaRuntime" */ = {
+			isa = XCLocalSwiftPackageReference;
+			relativePath = Packages/LlamaRuntime;
+		};
+/* End XCLocalSwiftPackageReference section */
+
+/* Begin XCSwiftPackageProductDependency section */
+		AA0000030000000000000003 /* LlamaFramework */ = {
+			isa = XCSwiftPackageProductDependency;
+			productName = LlamaFramework;
+		};
+/* End XCSwiftPackageProductDependency section */
 	};
 	rootObject = E2E31EE2301B4EC50057E4C1 /* Project object */;
 }
