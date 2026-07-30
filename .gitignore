@@ -1,0 +1,28 @@
+.DS_Store
+
+# Xcode per-user state and build output
+xcuserdata/
+*.xcuserstate
+DerivedData/
+build/
+*.ipa
+*.dSYM
+*.dSYM.zip
+
+# Swift Package Manager caches
+.build/
+.swiftpm/
+
+# Local models, recordings, signing files and secrets
+*.gguf
+*.m4a
+*.wav
+*.mobileprovision
+*.p12
+*.cer
+.env
+.env.*
+!.env.example
+
+*.log
+*.tmp
