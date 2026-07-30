@@ -61,6 +61,7 @@ final class NoteEntity {
     var todo: String?
     var timeLabel: String
     var audioPath: String?
+    var audioDuration: Double?
     var sortOrder: Int
 
     init(
@@ -71,6 +72,7 @@ final class NoteEntity {
         todo: String?,
         timeLabel: String,
         audioPath: String?,
+        audioDuration: Double? = nil,
         sortOrder: Int
     ) {
         self.id = id
@@ -80,6 +82,7 @@ final class NoteEntity {
         self.todo = todo
         self.timeLabel = timeLabel
         self.audioPath = audioPath
+        self.audioDuration = audioDuration
         self.sortOrder = sortOrder
     }
 }
@@ -91,6 +94,7 @@ struct NoteSnapshot: Sendable {
     let todo: String?
     let time: String
     let audioURL: URL?
+    let audioDuration: Double?
 }
 
 struct WorkspaceSnapshot: Sendable {
@@ -143,7 +147,8 @@ final class LocalPersistenceStore {
                             summary: $0.summary,
                             todo: $0.todo,
                             time: $0.timeLabel,
-                            audioURL: RecordingFileStore.resolve($0.audioPath)
+                            audioURL: RecordingFileStore.resolve($0.audioPath),
+                            audioDuration: $0.audioDuration
                         )
                     }
             )
@@ -171,6 +176,7 @@ final class LocalPersistenceStore {
                     todo: note.todo,
                     timeLabel: note.time,
                     audioPath: note.audioURL.map(RecordingFileStore.storedValue),
+                    audioDuration: note.audioDuration,
                     sortOrder: noteIndex
                 ))
             }

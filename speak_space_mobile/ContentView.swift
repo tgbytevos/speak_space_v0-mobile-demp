@@ -104,10 +104,18 @@ struct ContentView: View {
         guard let notes = try? modelContext.fetch(FetchDescriptor<NoteEntity>()) else { return }
         var changed = false
         for note in notes {
-            guard let storedPath = note.audioPath, storedPath.hasPrefix("/"),
+            guard let storedPath = note.audioPath,
                   let currentURL = RecordingFileStore.resolve(storedPath) else { continue }
-            note.audioPath = RecordingFileStore.storedValue(for: currentURL)
-            changed = true
+            if storedPath.hasPrefix("/") {
+                note.audioPath = RecordingFileStore.storedValue(for: currentURL)
+                changed = true
+            }
+            if note.audioDuration == nil,
+               let player = try? AVAudioPlayer(contentsOf: currentURL),
+               player.duration > 0 {
+                note.audioDuration = player.duration
+                changed = true
+            }
         }
         if changed { try? modelContext.save() }
     }
@@ -228,6 +236,7 @@ private struct WorkspaceView: View {
                     todo: result.todos.isEmpty ? nil : result.todos.joined(separator: "\n"),
                     timeLabel: Date.now.formatted(date: .omitted, time: .shortened),
                     audioPath: RecordingFileStore.storedValue(for: result.audioURL),
+                    audioDuration: (try? AVAudioPlayer(contentsOf: result.audioURL))?.duration,
                     sortOrder: notes.count
                 )
                 modelContext.insert(note)
@@ -272,7 +281,10 @@ private struct VoiceNoteCard: View {
         self.pipeline = pipeline
         self.onChange = onChange
         _transcriptDraft = State(initialValue: note.content)
-        _audioPlayer = StateObject(wrappedValue: NoteAudioPlayer(url: RecordingFileStore.resolve(note.audioPath)))
+        _audioPlayer = StateObject(wrappedValue: NoteAudioPlayer(
+            url: RecordingFileStore.resolve(note.audioPath),
+            storedDuration: note.audioDuration
+        ))
     }
 
     var body: some View {
@@ -360,7 +372,7 @@ private struct VoiceNoteCard: View {
             }
             .buttonStyle(.plain)
             .accessibilityLabel(audioPlayer.isPlaying ? "Pause recording" : "Play recording")
-            Text(audioPlayer.timeLabel)
+            Text(audioPlayer.durationLabel)
                 .font(.caption.monospacedDigit())
                 .foregroundStyle(.secondary)
             Spacer()
@@ -426,14 +438,15 @@ private struct VoiceNoteCard: View {
 private final class NoteAudioPlayer: NSObject, ObservableObject, AVAudioPlayerDelegate {
     @Published private(set) var isPlaying = false
     @Published private(set) var progress = 0.0
-    @Published private(set) var timeLabel = "0:00"
+    @Published private(set) var durationLabel: String
 
     private let url: URL?
     private var player: AVAudioPlayer?
     private var timer: Timer?
 
-    init(url: URL?) {
+    init(url: URL?, storedDuration: Double?) {
         self.url = url
+        durationLabel = Self.format(storedDuration ?? 0)
         super.init()
         prepare()
     }
@@ -456,6 +469,9 @@ private final class NoteAudioPlayer: NSObject, ObservableObject, AVAudioPlayerDe
         player = try? AVAudioPlayer(contentsOf: url)
         player?.delegate = self
         player?.prepareToPlay()
+        if let duration = player?.duration, duration > 0 {
+            durationLabel = Self.format(duration)
+        }
         updateProgress()
     }
 
@@ -496,8 +512,11 @@ private final class NoteAudioPlayer: NSObject, ObservableObject, AVAudioPlayerDe
     private func updateProgress() {
         guard let player else { return }
         progress = player.duration > 0 ? player.currentTime / player.duration : 0
-        let seconds = max(0, Int(player.currentTime.rounded()))
-        timeLabel = String(format: "%d:%02d", seconds / 60, seconds % 60)
+    }
+
+    private static func format(_ duration: Double) -> String {
+        let seconds = max(0, Int(duration.rounded()))
+        return String(format: "%d:%02d", seconds / 60, seconds % 60)
     }
 
     nonisolated func audioPlayerDidFinishPlaying(_ player: AVAudioPlayer, successfully flag: Bool) {
