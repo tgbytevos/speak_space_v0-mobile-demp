@@ -13,11 +13,11 @@ enum LocalLlamaError: LocalizedError {
     var errorDescription: String? {
         switch self {
         case .noSelectedModel: return "Download and select a local model first."
-        case .loadFailed: return "Gemma could not be loaded. Make sure the model download completed successfully."
-        case .contextFailed: return "There is not enough free memory to start Gemma. Close other apps and try again."
-        case .tokenizeFailed: return "The note could not be prepared for Gemma."
-        case .decodeFailed: return "Gemma stopped while generating the response."
-        case .invalidResponse: return "Gemma returned an incomplete response. Please try again."
+        case .loadFailed: return "The local model could not be loaded. Make sure its download completed successfully."
+        case .contextFailed: return "There is not enough free memory to start the local model. Close other apps and try again."
+        case .tokenizeFailed: return "The note could not be prepared for the local model."
+        case .decodeFailed: return "The local model stopped while generating the response."
+        case .invalidResponse: return "The local model returned an incomplete response. Please try again."
         }
     }
 }
@@ -32,7 +32,8 @@ actor LocalLlamaEngine {
     }
 
     func generate(from text: String, type: NoteGenerationType) throws -> String {
-        let modelURL = try selectedModelURL()
+        let selected = try selectedModel()
+        let modelURL = selected.url
         try loadModelIfNeeded(at: modelURL)
         guard let model, let vocab = llama_model_get_vocab(model) else { throw LocalLlamaError.loadFailed }
 
@@ -60,7 +61,7 @@ actor LocalLlamaEngine {
             \(clipped)
             """
         }
-        let prompt = "<bos><start_of_turn>user\n\(instruction)<end_of_turn>\n<start_of_turn>model\n"
+        let prompt = formattedPrompt(instruction, format: selected.descriptor.promptFormat)
         let tokens = try tokenize(prompt, vocab: vocab)
 
         var params = llama_context_default_params()
@@ -112,15 +113,36 @@ actor LocalLlamaEngine {
         return try clean(output)
     }
 
-    private func selectedModelURL() throws -> URL {
-        guard UserDefaults.standard.string(forKey: LocalModelManager.activeModelKey) != nil else {
+    private func selectedModel() throws -> (descriptor: LocalModelDescriptor, url: URL) {
+        guard let activeID = UserDefaults.standard.string(forKey: LocalModelManager.activeModelKey),
+              let descriptor = [
+                LocalModelDescriptor.qwenHalfB,
+                .gemma3OneB,
+                .llamaOneB,
+                .qwenOneAndHalfB
+              ].first(where: { $0.id == activeID }) else {
             throw LocalLlamaError.noSelectedModel
         }
         let directory = FileManager.default.urls(for: .applicationSupportDirectory, in: .userDomainMask)[0]
             .appendingPathComponent("LocalModels", isDirectory: true)
-        let url = directory.appendingPathComponent(LocalModelDescriptor.gemma3OneB.filename)
+        let url = directory.appendingPathComponent(descriptor.filename)
         guard FileManager.default.fileExists(atPath: url.path) else { throw LocalLlamaError.noSelectedModel }
-        return url
+        return (descriptor, url)
+    }
+
+    private func formattedPrompt(
+        _ instruction: String,
+        format: LocalModelDescriptor.PromptFormat
+    ) -> String {
+        let system = "You organize voice notes. Never invent facts. Preserve the note's language. Return only the requested output."
+        switch format {
+        case .gemma:
+            return "<bos><start_of_turn>user\n\(system)\n\n\(instruction)<end_of_turn>\n<start_of_turn>model\n"
+        case .qwen:
+            return "<|im_start|>system\n\(system)<|im_end|>\n<|im_start|>user\n\(instruction)<|im_end|>\n<|im_start|>assistant\n"
+        case .llama:
+            return "<|begin_of_text|><|start_header_id|>system<|end_header_id|>\n\n\(system)<|eot_id|><|start_header_id|>user<|end_header_id|>\n\n\(instruction)<|eot_id|><|start_header_id|>assistant<|end_header_id|>\n\n"
+        }
     }
 
     private func loadModelIfNeeded(at url: URL) throws {
@@ -166,6 +188,8 @@ actor LocalLlamaEngine {
 
     private func clean(_ raw: String) throws -> String {
         var cleaned = raw.replacingOccurrences(of: "<end_of_turn>", with: "")
+            .replacingOccurrences(of: "<|im_end|>", with: "")
+            .replacingOccurrences(of: "<|eot_id|>", with: "")
             .trimmingCharacters(in: .whitespacesAndNewlines)
         if cleaned.hasPrefix("```") {
             cleaned = cleaned.replacingOccurrences(of: "```markdown", with: "")

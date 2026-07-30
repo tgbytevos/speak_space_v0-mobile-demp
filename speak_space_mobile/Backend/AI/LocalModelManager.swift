@@ -4,6 +4,12 @@ import CryptoKit
 import Foundation
 
 struct LocalModelDescriptor: Identifiable, Hashable, Sendable {
+    enum PromptFormat: Hashable, Sendable {
+        case gemma
+        case qwen
+        case llama
+    }
+
     let id: String
     let displayName: String
     let detail: String
@@ -11,6 +17,7 @@ struct LocalModelDescriptor: Identifiable, Hashable, Sendable {
     let downloadURL: URL
     let expectedBytes: Int64
     let sha256: String
+    let promptFormat: PromptFormat
 
     nonisolated static let gemma3OneB = LocalModelDescriptor(
         id: "gemma-3-1b-it-q4km",
@@ -19,7 +26,41 @@ struct LocalModelDescriptor: Identifiable, Hashable, Sendable {
         filename: "gemma-3-1b-it-Q4_K_M.gguf",
         downloadURL: URL(string: "https://huggingface.co/ggml-org/gemma-3-1b-it-GGUF/resolve/main/gemma-3-1b-it-Q4_K_M.gguf?download=true")!,
         expectedBytes: 806_058_240,
-        sha256: "8ccc5cd1f1b3602548715ae25a66ed73fd5dc68a210412eea643eb20eb75a135"
+        sha256: "8ccc5cd1f1b3602548715ae25a66ed73fd5dc68a210412eea643eb20eb75a135",
+        promptFormat: .gemma
+    )
+
+    nonisolated static let qwenHalfB = LocalModelDescriptor(
+        id: "qwen-2.5-0.5b-instruct-q4km",
+        displayName: "Qwen 2.5 0.5B",
+        detail: "Q4_K_M · Multilingual · 469 MB · Fastest",
+        filename: "qwen2.5-0.5b-instruct-q4_k_m.gguf",
+        downloadURL: URL(string: "https://huggingface.co/Qwen/Qwen2.5-0.5B-Instruct-GGUF/resolve/main/qwen2.5-0.5b-instruct-q4_k_m.gguf?download=true")!,
+        expectedBytes: 491_400_032,
+        sha256: "74a4da8c9fdbcd15bd1f6d01d621410d31c6fc00986f5eb687824e7b93d7a9db",
+        promptFormat: .qwen
+    )
+
+    nonisolated static let llamaOneB = LocalModelDescriptor(
+        id: "llama-3.2-1b-instruct-q4km",
+        displayName: "Llama 3.2 1B",
+        detail: "Q4_K_M · 8 languages · 770 MB · English focused",
+        filename: "Llama-3.2-1B-Instruct-Q4_K_M.gguf",
+        downloadURL: URL(string: "https://huggingface.co/bartowski/Llama-3.2-1B-Instruct-GGUF/resolve/main/Llama-3.2-1B-Instruct-Q4_K_M.gguf?download=true")!,
+        expectedBytes: 807_694_464,
+        sha256: "6f85a640a97cf2bf5b8e764087b1e83da0fdb51d7c9fab7d0fece9385611df83",
+        promptFormat: .llama
+    )
+
+    nonisolated static let qwenOneAndHalfB = LocalModelDescriptor(
+        id: "qwen-2.5-1.5b-instruct-q4km",
+        displayName: "Qwen 2.5 1.5B",
+        detail: "Q4_K_M · Multilingual · 1.04 GB · Higher quality",
+        filename: "qwen2.5-1.5b-instruct-q4_k_m.gguf",
+        downloadURL: URL(string: "https://huggingface.co/Qwen/Qwen2.5-1.5B-Instruct-GGUF/resolve/main/qwen2.5-1.5b-instruct-q4_k_m.gguf?download=true")!,
+        expectedBytes: 1_117_320_736,
+        sha256: "6a1a2eb6d15622bf3c96857206351ba97e1af16c30d7a74ee38970e434e9407e",
+        promptFormat: .qwen
     )
 }
 
@@ -43,7 +84,12 @@ final class LocalModelManager: NSObject, ObservableObject {
     @Published private(set) var states: [String: LocalModelState] = [:]
     @Published private(set) var activeModelID: String?
 
-    let catalog: [LocalModelDescriptor] = [.gemma3OneB]
+    let catalog: [LocalModelDescriptor] = [
+        .qwenHalfB,
+        .gemma3OneB,
+        .llamaOneB,
+        .qwenOneAndHalfB
+    ]
     private var activeDownloadID: String?
     private var downloadTask: URLSessionDownloadTask?
     private lazy var downloadSession = URLSession(configuration: .default, delegate: self, delegateQueue: nil)
