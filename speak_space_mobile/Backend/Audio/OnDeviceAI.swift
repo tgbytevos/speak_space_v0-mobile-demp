@@ -75,9 +75,11 @@ final class OnDevicePipeline: ObservableObject {
 
     @Published private(set) var phase: Phase = .idle
     @Published var lastError: String?
+    @Published private(set) var audioLevel: Double = 0
 
     private var recorder: AVAudioRecorder?
     private var recordingURL: URL?
+    private var meterTimer: Timer?
 
     var isBusy: Bool { phase != .idle && phase != .recording }
 
@@ -117,14 +119,17 @@ final class OnDevicePipeline: ObservableObject {
             throw OnDeviceAIError.audioSetupFailed("creating the audio recorder (\(error.localizedDescription))")
         }
         recorder.prepareToRecord()
+        recorder.isMeteringEnabled = true
         guard recorder.record() else { throw OnDeviceAIError.noRecording }
 
         self.recorder = recorder
         recordingURL = url
         phase = .recording
+        startMetering()
     }
 
     func cancelRecording() {
+        stopMetering()
         recorder?.stop()
         recorder = nil
         if let recordingURL { try? FileManager.default.removeItem(at: recordingURL) }
@@ -134,6 +139,7 @@ final class OnDevicePipeline: ObservableObject {
     }
 
     func finishAndProcess(locale requestedLocale: Locale = .current) async throws -> ProcessedVoiceNote {
+        stopMetering()
         recorder?.stop()
         recorder = nil
         try? AVAudioSession.sharedInstance().setActive(false, options: .notifyOthersOnDeactivation)
@@ -153,6 +159,24 @@ final class OnDevicePipeline: ObservableObject {
             todos: [],
             audioURL: savedAudioURL
         )
+    }
+
+    private func startMetering() {
+        stopMetering()
+        meterTimer = Timer.scheduledTimer(withTimeInterval: 0.08, repeats: true) { [weak self] _ in
+            Task { @MainActor in
+                guard let self, let recorder = self.recorder else { return }
+                recorder.updateMeters()
+                let decibels = max(-50, Double(recorder.averagePower(forChannel: 0)))
+                self.audioLevel = max(0.03, min(1, (decibels + 50) / 50))
+            }
+        }
+    }
+
+    private func stopMetering() {
+        meterTimer?.invalidate()
+        meterTimer = nil
+        audioLevel = 0
     }
 
     private func persistRecording(at temporaryURL: URL) throws -> URL {

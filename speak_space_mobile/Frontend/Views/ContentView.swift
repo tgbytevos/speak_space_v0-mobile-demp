@@ -264,6 +264,7 @@ private struct WorkspaceView: View {
     @State private var notes: [NoteEntity] = []
     @State private var isRecording = false
     @State private var errorMessage: String?
+    @State private var textDraft = ""
 
     var body: some View {
         ZStack(alignment: .bottom) {
@@ -289,7 +290,7 @@ private struct WorkspaceView: View {
                 }
             }
 
-            recordingBar
+            composerBar
         }
         .navigationTitle(workspace.title)
         .navigationBarTitleDisplayMode(.inline)
@@ -304,28 +305,89 @@ private struct WorkspaceView: View {
         }
     }
 
-    private var recordingBar: some View {
-        VStack(spacing: 8) {
-            if pipeline.phase != .idle {
-                Text(pipeline.phase.label)
-                    .font(.caption.weight(.medium))
-                    .foregroundStyle(isRecording ? .red : .secondary)
-            }
+    private var composerBar: some View {
+        HStack(spacing: 10) {
             Button {
                 Task { await toggleRecording() }
             } label: {
-                Label(isRecording ? "Stop & Transcribe" : "Record a Note",
-                      systemImage: isRecording ? "stop.fill" : "mic.fill")
-                    .font(.headline)
-                    .frame(maxWidth: .infinity)
-                    .padding(.vertical, 14)
+                Image(systemName: isRecording ? "stop.fill" : "mic.fill")
+                    .font(.body.weight(.semibold))
+                    .foregroundStyle(.white)
+                    .frame(width: 38, height: 38)
+                    .background(isRecording ? Color.red : Color.accentColor, in: Circle())
             }
-            .buttonStyle(.borderedProminent)
-            .tint(isRecording ? .red : .accentColor)
+            .buttonStyle(.plain)
             .disabled(pipeline.isBusy)
+            .accessibilityLabel(isRecording ? "Stop and transcribe" : "Record a voice note")
+
+            Group {
+                if isRecording {
+                    HStack(spacing: 10) {
+                        AudioWaveformView(level: pipeline.audioLevel)
+                        Text("Listening…")
+                            .font(.caption.weight(.medium))
+                            .foregroundStyle(.red)
+                    }
+                    .transition(.opacity.combined(with: .scale(scale: 0.96)))
+                } else if pipeline.isBusy {
+                    HStack(spacing: 8) {
+                        ProgressView().controlSize(.small)
+                        Text(pipeline.phase.label)
+                            .font(.caption)
+                            .foregroundStyle(.secondary)
+                    }
+                } else {
+                    TextField("Type a note or record your voice…", text: $textDraft, axis: .vertical)
+                        .lineLimit(1...4)
+                        .submitLabel(.send)
+                        .onSubmit { addTextNote() }
+                }
+            }
+            .frame(maxWidth: .infinity, minHeight: 38, alignment: .leading)
+            .padding(.horizontal, 12)
+            .background(.secondary.opacity(0.10), in: RoundedRectangle(cornerRadius: 19))
+            .animation(.easeInOut(duration: 0.18), value: isRecording)
+
+            if !isRecording, !pipeline.isBusy {
+                Button(action: addTextNote) {
+                    Image(systemName: "arrow.up")
+                        .font(.body.weight(.bold))
+                        .foregroundStyle(.white)
+                        .frame(width: 38, height: 38)
+                        .background(textDraft.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty
+                                    ? Color.secondary : Color.accentColor, in: Circle())
+                }
+                .buttonStyle(.plain)
+                .disabled(textDraft.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty)
+                .accessibilityLabel("Add text note")
+            }
         }
-        .padding()
+        .padding(.horizontal)
+        .padding(.vertical, 10)
         .background(.ultraThinMaterial)
+    }
+
+    private func addTextNote() {
+        let content = textDraft.trimmingCharacters(in: .whitespacesAndNewlines)
+        guard !content.isEmpty else { return }
+        modelContext.insert(NoteEntity(
+            id: UUID(),
+            workspaceID: workspace.id,
+            content: content,
+            summary: nil,
+            todo: nil,
+            timeLabel: Date.now.formatted(date: .omitted, time: .shortened),
+            audioPath: nil,
+            audioDuration: nil,
+            sortOrder: notes.count
+        ))
+        do {
+            try modelContext.save()
+            textDraft = ""
+            refreshNotes()
+        } catch {
+            errorMessage = error.localizedDescription
+        }
     }
 
     @MainActor
@@ -364,6 +426,32 @@ private struct WorkspaceView: View {
         var descriptor = FetchDescriptor<NoteEntity>(predicate: #Predicate { $0.workspaceID == id })
         descriptor.sortBy = [SortDescriptor(\NoteEntity.sortOrder, order: .reverse)]
         notes = (try? modelContext.fetch(descriptor)) ?? []
+    }
+}
+
+private struct AudioWaveformView: View {
+    let level: Double
+    private let shape: [Double] = [0.35, 0.65, 1, 0.55, 0.82, 0.42, 0.72, 0.3]
+
+    var body: some View {
+        HStack(spacing: 3) {
+            ForEach(Array(shape.enumerated()), id: \.offset) { index, multiplier in
+                Capsule()
+                    .fill(Color.red)
+                    .frame(width: 3, height: barHeight(multiplier, index: index))
+                    .animation(
+                        .easeInOut(duration: 0.10).delay(Double(index) * 0.008),
+                        value: level
+                    )
+            }
+        }
+        .frame(height: 28)
+        .accessibilityHidden(true)
+    }
+
+    private func barHeight(_ multiplier: Double, index: Int) -> Double {
+        let variation = 0.72 + Double(index % 3) * 0.14
+        return max(4, min(28, 4 + level * 24 * multiplier * variation))
     }
 }
 
