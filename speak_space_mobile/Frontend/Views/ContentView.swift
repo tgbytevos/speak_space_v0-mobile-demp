@@ -4,8 +4,10 @@ import SwiftUI
 #if os(iOS)
 import AVFoundation
 import Combine
+import UIKit
 
 struct ContentView: View {
+    @Environment(\.scenePhase) private var scenePhase
     @Environment(\.modelContext) private var modelContext
     @Query(sort: \WorkspaceEntity.sortOrder) private var workspaces: [WorkspaceEntity]
     @StateObject private var pipeline = OnDevicePipeline()
@@ -13,31 +15,36 @@ struct ContentView: View {
     @State private var showingNewWorkspace = false
     @State private var showingModels = false
     @State private var newWorkspaceTitle = ""
+    @State private var microphonePermission = AVAudioApplication.shared.recordPermission
     @AppStorage("isDarkMode") private var isDarkMode = false
 
     var body: some View {
         NavigationStack {
-            Group {
-                if workspaces.isEmpty {
-                    ContentUnavailableView {
-                        Label("Your voice workspace", systemImage: "waveform.circle.fill")
-                    } description: {
-                        Text("Create a workspace, record an idea, and turn it into a transcript, summary, or to-do list — all on this iPhone.")
-                    } actions: {
-                        Button("Create Workspace") { showingNewWorkspace = true }
-                            .buttonStyle(.borderedProminent)
-                    }
-                } else {
-                    List {
-                        Section("Workspaces") {
-                            ForEach(workspaces) { workspace in
-                                NavigationLink {
-                                    WorkspaceView(workspace: workspace, pipeline: pipeline)
-                                } label: {
-                                    WorkspaceRow(workspace: workspace)
+            VStack(spacing: 0) {
+                setupNotices
+
+                Group {
+                    if workspaces.isEmpty {
+                        ContentUnavailableView {
+                            Label("Your voice workspace", systemImage: "waveform.circle.fill")
+                        } description: {
+                            Text("Create a workspace, record an idea, and turn it into a transcript, summary, or to-do list — all on this iPhone.")
+                        } actions: {
+                            Button("Create Workspace") { showingNewWorkspace = true }
+                                .buttonStyle(.borderedProminent)
+                        }
+                    } else {
+                        List {
+                            Section("Workspaces") {
+                                ForEach(workspaces) { workspace in
+                                    NavigationLink {
+                                        WorkspaceView(workspace: workspace, pipeline: pipeline)
+                                    } label: {
+                                        WorkspaceRow(workspace: workspace)
+                                    }
                                 }
+                                .onDelete(perform: deleteWorkspaces)
                             }
-                            .onDelete(perform: deleteWorkspaces)
                         }
                     }
                 }
@@ -73,9 +80,68 @@ struct ContentView: View {
             } message: {
                 Text("Use workspaces to group recordings from a meeting, project, or idea.")
             }
-            .task { migrateLegacyRecordingPaths() }
+            .task {
+                migrateLegacyRecordingPaths()
+                refreshPermissionState()
+            }
+            .onChange(of: scenePhase) { _, phase in
+                if phase == .active { refreshPermissionState() }
+            }
         }
         .preferredColorScheme(isDarkMode ? .dark : .light)
+    }
+
+    @ViewBuilder
+    private var setupNotices: some View {
+        VStack(spacing: 8) {
+            if modelManager.activeModel == nil {
+                SetupNotice(
+                    icon: "cpu",
+                    title: installedModelExists ? "No offline model is active" : "No offline model is installed",
+                    message: installedModelExists
+                        ? "Select an installed model before creating local summaries."
+                        : "Download an offline model to create summaries and to-do lists privately on this iPhone.",
+                    buttonTitle: installedModelExists ? "Select Model" : "Download Model"
+                ) {
+                    showingModels = true
+                }
+            }
+
+            if microphonePermission != .granted {
+                SetupNotice(
+                    icon: "mic.slash.fill",
+                    title: "Microphone access is required",
+                    message: microphonePermission == .denied
+                        ? "Enable microphone access in Settings to record voice notes."
+                        : "Allow microphone access to record and transcribe voice notes.",
+                    buttonTitle: microphonePermission == .denied ? "Open Settings" : "Allow Access"
+                ) {
+                    handleMicrophonePermission()
+                }
+            }
+        }
+        .padding(.horizontal)
+        .padding(.top, 8)
+    }
+
+    private var installedModelExists: Bool {
+        modelManager.catalog.contains { modelManager.state(for: $0).isInstalled }
+    }
+
+    private func refreshPermissionState() {
+        microphonePermission = AVAudioApplication.shared.recordPermission
+    }
+
+    private func handleMicrophonePermission() {
+        if microphonePermission == .denied {
+            guard let url = URL(string: UIApplication.openSettingsURLString) else { return }
+            UIApplication.shared.open(url)
+        } else {
+            Task { @MainActor in
+                _ = await AVAudioApplication.requestRecordPermission()
+                refreshPermissionState()
+            }
+        }
     }
 
     private func createWorkspace() {
@@ -126,6 +192,38 @@ struct ContentView: View {
             }
         }
         if changed { try? modelContext.save() }
+    }
+}
+
+private struct SetupNotice: View {
+    let icon: String
+    let title: String
+    let message: String
+    let buttonTitle: String
+    let action: () -> Void
+
+    var body: some View {
+        HStack(alignment: .top, spacing: 10) {
+            Image(systemName: icon)
+                .foregroundStyle(.orange)
+                .frame(width: 24, height: 24)
+
+            VStack(alignment: .leading, spacing: 3) {
+                Text(title).font(.subheadline.weight(.semibold))
+                Text(message)
+                    .font(.caption)
+                    .foregroundStyle(.secondary)
+            }
+
+            Spacer(minLength: 4)
+
+            Button(buttonTitle, action: action)
+                .buttonStyle(.bordered)
+                .controlSize(.small)
+        }
+        .padding(11)
+        .background(.orange.opacity(0.09), in: RoundedRectangle(cornerRadius: 12))
+        .overlay(RoundedRectangle(cornerRadius: 12).stroke(.orange.opacity(0.22)))
     }
 }
 
@@ -313,48 +411,22 @@ private struct VoiceNoteCard: View {
                 }
             }
 
-            if note.audioPath != nil {
-                audioControls
-            }
+            if hasAICreation {
+                HStack(alignment: .top, spacing: 0) {
+                    transcriptColumn
+                        .frame(maxWidth: .infinity, maxHeight: .infinity, alignment: .topLeading)
 
-            if isEditing {
-                VStack(spacing: 10) {
-                    TextEditor(text: $transcriptDraft)
-                        .font(.body)
-                        .frame(minHeight: 110)
-                        .padding(8)
-                        .scrollContentBackground(.hidden)
-                        .background(.secondary.opacity(0.08), in: RoundedRectangle(cornerRadius: 10))
+                    Divider()
+                        .padding(.horizontal, 10)
 
-                    HStack {
-                        Spacer()
-                        Button("Cancel") { cancelEditing() }
-                        Button("Save") { saveTranscript() }
-                            .buttonStyle(.borderedProminent)
-                            .disabled(transcriptDraft.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty)
-                    }
+                    aiColumn
+                        .frame(maxWidth: .infinity, maxHeight: .infinity, alignment: .topLeading)
                 }
+                .frame(minHeight: 190, maxHeight: 270)
             } else {
-                Text(note.content)
-                    .font(.body)
-                    .textSelection(.enabled)
-                    .contentShape(Rectangle())
-                    .onTapGesture(count: 2) { beginEditing() }
-            }
-
-            if let summary = note.summary {
-                creation(title: "Summary", icon: "sparkles", text: summary)
-            }
-            if let todo = note.todo {
-                creation(title: "To-do", icon: "checklist", text: todo)
-            }
-            if let generating {
-                HStack(spacing: 8) {
-                    ProgressView()
-                    Text("Creating \(generating.progressLabel)…")
-                }
-                .font(.caption)
-                .foregroundStyle(.secondary)
+                transcriptColumn
+                    .frame(maxWidth: .infinity, alignment: .topLeading)
+                    .frame(minHeight: 120)
             }
         }
         .padding(16)
@@ -365,6 +437,91 @@ private struct VoiceNoteCard: View {
         .alert("Couldn’t create content", isPresented: Binding(
             get: { errorMessage != nil }, set: { if !$0 { errorMessage = nil } }
         )) { Button("OK", role: .cancel) {} } message: { Text(errorMessage ?? "") }
+    }
+
+    private var hasAICreation: Bool {
+        generating != nil || note.summary != nil || note.todo != nil
+    }
+
+    private var transcriptColumn: some View {
+        VStack(alignment: .leading, spacing: 9) {
+            Label("Transcript", systemImage: "text.quote")
+                .font(.caption.weight(.bold))
+                .foregroundStyle(.secondary)
+
+            if note.audioPath != nil {
+                audioControls
+            }
+
+            if isEditing {
+                TextEditor(text: $transcriptDraft)
+                    .font(.callout)
+                    .padding(5)
+                    .scrollContentBackground(.hidden)
+                    .background(.secondary.opacity(0.08), in: RoundedRectangle(cornerRadius: 9))
+
+                HStack(spacing: 8) {
+                    Button("Cancel") { cancelEditing() }
+                        .font(.caption)
+                    Button("Save") { saveTranscript() }
+                        .font(.caption.weight(.semibold))
+                        .buttonStyle(.borderedProminent)
+                        .controlSize(.small)
+                        .disabled(transcriptDraft.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty)
+                }
+            } else {
+                ScrollView {
+                    Text(note.content)
+                        .font(.callout)
+                        .frame(maxWidth: .infinity, alignment: .leading)
+                        .textSelection(.enabled)
+                        .contentShape(Rectangle())
+                        .onTapGesture(count: 2) { beginEditing() }
+                }
+            }
+        }
+    }
+
+    private var aiColumn: some View {
+        VStack(alignment: .leading, spacing: 9) {
+            Label("AI Creations", systemImage: "sparkles")
+                .font(.caption.weight(.bold))
+                .foregroundStyle(.tint)
+
+            if let generating {
+                HStack(spacing: 7) {
+                    ProgressView().controlSize(.small)
+                    Text("Creating \(generating.progressLabel)…")
+                }
+                .font(.caption)
+                .foregroundStyle(.secondary)
+            }
+
+            if note.summary == nil, note.todo == nil, generating == nil {
+                VStack(alignment: .leading, spacing: 8) {
+                    Text("No AI output yet")
+                        .font(.caption)
+                        .foregroundStyle(.secondary)
+                    Button("Summary") { generate(.summary) }
+                        .buttonStyle(.bordered)
+                        .controlSize(.small)
+                    Button("To-do") { generate(.todo) }
+                        .buttonStyle(.bordered)
+                        .controlSize(.small)
+                }
+            } else {
+                ScrollView {
+                    VStack(alignment: .leading, spacing: 9) {
+                        if let summary = note.summary {
+                            creation(title: "Summary", icon: "text.alignleft", text: summary)
+                        }
+                        if let todo = note.todo {
+                            creation(title: "To-do", icon: "checklist", text: todo)
+                        }
+                    }
+                }
+            }
+        }
     }
 
     private var audioControls: some View {
@@ -417,7 +574,7 @@ private struct VoiceNoteCard: View {
             Text(text).font(.callout)
         }
         .frame(maxWidth: .infinity, alignment: .leading)
-        .padding(12)
+        .padding(9)
         .background(.secondary.opacity(0.08), in: RoundedRectangle(cornerRadius: 12))
     }
 
