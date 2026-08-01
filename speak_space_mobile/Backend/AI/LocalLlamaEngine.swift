@@ -150,7 +150,13 @@ actor LocalLlamaEngine {
         if let model { llama_model_free(model) }
         llama_backend_init()
         var params = llama_model_default_params()
+#if targetEnvironment(simulator)
+        // The iOS Simulator Metal device does not support residency sets used by
+        // llama.cpp. Metal validation aborts the process if GPU layers are enabled.
+        params.n_gpu_layers = 0
+#else
         params.n_gpu_layers = 99
+#endif
         guard let loaded = llama_model_load_from_file(url.path, params) else {
             model = nil
             loadedPath = nil

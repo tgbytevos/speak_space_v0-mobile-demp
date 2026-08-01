@@ -24,6 +24,7 @@ enum OnDeviceAIError: LocalizedError {
     case unsupportedLocale
     case emptyTranscript
     case modelUnavailable(String)
+    case modelTimedOut
     case audioSetupFailed(String)
 
     var errorDescription: String? {
@@ -40,6 +41,8 @@ enum OnDeviceAIError: LocalizedError {
             return "No speech was detected in the recording."
         case .modelUnavailable(let reason):
             return reason
+        case .modelTimedOut:
+            return "The local model timed out after 30 seconds. Try again, reload the model, or select a smaller model."
         case .audioSetupFailed(let step):
             return "Audio setup failed while \(step). Please try again."
         }
@@ -192,7 +195,9 @@ final class OnDevicePipeline: ObservableObject {
         phase = .generating
         defer { phase = .idle }
         if UserDefaults.standard.string(forKey: LocalModelManager.activeModelKey) != nil {
-            return try await LocalLlamaEngine.shared.generate(from: text, type: type)
+            return try await withModelTimeout(seconds: 30) {
+                try await LocalLlamaEngine.shared.generate(from: text, type: type)
+            }
         }
         let generated = try await generate(from: text)
         switch type {
@@ -202,6 +207,28 @@ final class OnDevicePipeline: ObservableObject {
             return generated.todos.isEmpty
                 ? "No actionable items found."
                 : generated.todos.enumerated().map { "\($0.offset + 1). \($0.element)" }.joined(separator: "\n")
+        }
+    }
+
+    private func withModelTimeout<T: Sendable>(
+        seconds: Double,
+        operation: @escaping @Sendable () async throws -> T
+    ) async throws -> T {
+        try await withCheckedThrowingContinuation { continuation in
+            let race = ModelTimeoutRace(continuation: continuation)
+
+            Task {
+                do {
+                    await race.resolve(.success(try await operation()))
+                } catch {
+                    await race.resolve(.failure(error))
+                }
+            }
+
+            Task {
+                try? await Task.sleep(for: .seconds(seconds))
+                await race.resolve(.failure(OnDeviceAIError.modelTimedOut))
+            }
         }
     }
 
@@ -304,6 +331,20 @@ final class OnDevicePipeline: ObservableObject {
             options: GenerationOptions(temperature: 0.2, maximumResponseTokens: 500)
         )
         return response.content
+    }
+}
+
+private actor ModelTimeoutRace<Value: Sendable> {
+    private var continuation: CheckedContinuation<Value, Error>?
+
+    init(continuation: CheckedContinuation<Value, Error>) {
+        self.continuation = continuation
+    }
+
+    func resolve(_ result: Result<Value, Error>) {
+        guard let continuation else { return }
+        self.continuation = nil
+        continuation.resume(with: result)
     }
 }
 
