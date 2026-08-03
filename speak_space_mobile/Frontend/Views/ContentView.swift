@@ -6,6 +6,39 @@ import AVFoundation
 import Combine
 import UIKit
 
+enum LocalSubsystemReadiness: Equatable {
+    case notConfigured
+    case ready
+    case unavailable
+
+    static func resolve(
+        hasSelection: Bool,
+        selectedFileIsReady: Bool,
+        hasFailure: Bool,
+        runtimeFailed: Bool
+    ) -> LocalSubsystemReadiness {
+        guard hasSelection else { return hasFailure ? .unavailable : .notConfigured }
+        if runtimeFailed || hasFailure || !selectedFileIsReady { return .unavailable }
+        return .ready
+    }
+
+    var shortLabel: String {
+        switch self {
+        case .notConfigured: return "No model"
+        case .ready: return "Ready"
+        case .unavailable: return "Unavailable"
+        }
+    }
+
+    var color: Color {
+        switch self {
+        case .notConfigured: return .secondary
+        case .ready: return .green
+        case .unavailable: return .red
+        }
+    }
+}
+
 struct ContentView: View {
     @Environment(\.scenePhase) private var scenePhase
     @Environment(\.modelContext) private var modelContext
@@ -56,14 +89,16 @@ struct ContentView: View {
                 ToolbarItem(placement: .topBarLeading) {
                     Button { showingModels = true } label: {
                         Image(systemName: "cpu")
+                            .foregroundStyle(textModelReadiness.color)
                     }
-                    .accessibilityLabel("Local AI models")
+                    .accessibilityLabel("Local text model: \(textModelReadiness.shortLabel)")
                 }
                 ToolbarItem(placement: .topBarLeading) {
                     Button { showingWhisperModels = true } label: {
                         Image(systemName: "waveform.badge.mic")
+                            .foregroundStyle(whisperModelReadiness.color)
                     }
-                    .accessibilityLabel("Whisper transcription models")
+                    .accessibilityLabel("Whisper transcription model: \(whisperModelReadiness.shortLabel)")
                 }
                 ToolbarItem(placement: .topBarTrailing) {
                     Button { isDarkMode.toggle() } label: {
@@ -157,6 +192,24 @@ struct ContentView: View {
 
     private var installedWhisperModelExists: Bool {
         whisperModelManager.catalog.contains { whisperModelManager.state(for: $0).isInstalled }
+    }
+
+    private var textModelReadiness: LocalSubsystemReadiness {
+        .resolve(
+            hasSelection: modelManager.activeModelID != nil,
+            selectedFileIsReady: modelManager.activeModelIsReady,
+            hasFailure: modelManager.hasAvailabilityFailure,
+            runtimeFailed: pipeline.textModelRuntimeFailed
+        )
+    }
+
+    private var whisperModelReadiness: LocalSubsystemReadiness {
+        .resolve(
+            hasSelection: whisperModelManager.activeModelID != nil,
+            selectedFileIsReady: whisperModelManager.activeModelIsReady,
+            hasFailure: whisperModelManager.hasAvailabilityFailure,
+            runtimeFailed: pipeline.whisperRuntimeFailed
+        )
     }
 
     private func refreshPermissionState() {

@@ -70,4 +70,33 @@ struct speak_space_mobileTests {
         #expect(WhisperModelStorage.isInstalled(model, in: directory))
     }
 
+    @Test func localSubsystemReadinessUsesThreeDistinctStates() {
+        #expect(LocalSubsystemReadiness.resolve(
+            hasSelection: false, selectedFileIsReady: false, hasFailure: false, runtimeFailed: false
+        ) == .notConfigured)
+        #expect(LocalSubsystemReadiness.resolve(
+            hasSelection: true, selectedFileIsReady: true, hasFailure: false, runtimeFailed: false
+        ) == .ready)
+        #expect(LocalSubsystemReadiness.resolve(
+            hasSelection: true, selectedFileIsReady: false, hasFailure: false, runtimeFailed: false
+        ) == .unavailable)
+        #expect(LocalSubsystemReadiness.resolve(
+            hasSelection: true, selectedFileIsReady: true, hasFailure: false, runtimeFailed: true
+        ) == .unavailable)
+        #expect(LocalSubsystemReadiness.resolve(
+            hasSelection: false, selectedFileIsReady: false, hasFailure: false, runtimeFailed: true
+        ) == .notConfigured)
+    }
+
+    @Test func persistenceRecoveryTargetsStoreAndSQLiteSidecars() {
+        let storeURL = URL(fileURLWithPath: "/tmp/speak-space-test.store")
+        let files = PersistenceBootstrap.storeFiles(for: storeURL)
+
+        #expect(files.map(\.path) == [
+            "/tmp/speak-space-test.store",
+            "/tmp/speak-space-test.store-shm",
+            "/tmp/speak-space-test.store-wal"
+        ])
+    }
+
 }

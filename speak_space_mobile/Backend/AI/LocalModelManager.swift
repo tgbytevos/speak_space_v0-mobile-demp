@@ -105,6 +105,18 @@ final class LocalModelManager: NSObject, ObservableObject {
         return catalog.first { $0.id == activeModelID }
     }
 
+    var activeModelIsReady: Bool {
+        guard let model = activeModel, state(for: model).isInstalled,
+              let attributes = try? FileManager.default.attributesOfItem(atPath: modelURL(for: model).path),
+              let size = (attributes[.size] as? NSNumber)?.int64Value else { return false }
+        return size == model.expectedBytes
+    }
+
+    var hasAvailabilityFailure: Bool {
+        if let activeModel { return state(for: activeModel).isFailure }
+        return states.values.contains { $0.isFailure }
+    }
+
     var compactStatusLabel: String {
         guard let model = activeModel else { return "No local model" }
         switch state(for: model) {
@@ -168,13 +180,12 @@ final class LocalModelManager: NSObject, ObservableObject {
 
     private func refreshInstalledModels() {
         for model in catalog {
-            states[model.id] = FileManager.default.fileExists(atPath: modelURL(for: model).path)
-                ? .installed : .notInstalled
+            let attributes = try? FileManager.default.attributesOfItem(atPath: modelURL(for: model).path)
+            let size = (attributes?[.size] as? NSNumber)?.int64Value
+            states[model.id] = size == model.expectedBytes ? .installed : .notInstalled
         }
-        if let activeModelID,
-           !(states[activeModelID]?.isInstalled ?? false) {
-            self.activeModelID = nil
-            UserDefaults.standard.removeObject(forKey: Self.activeModelKey)
+        if let activeModel, !state(for: activeModel).isInstalled {
+            states[activeModel.id] = .failed("The selected local AI model is missing or incomplete. Download it again.")
         }
     }
 
@@ -218,6 +229,13 @@ final class LocalModelManager: NSObject, ObservableObject {
             return true
         }) {}
         return hasher.finalize().map { String(format: "%02x", $0) }.joined()
+    }
+}
+
+private extension LocalModelState {
+    var isFailure: Bool {
+        if case .failed = self { return true }
+        return false
     }
 }
 

@@ -112,6 +112,16 @@ final class WhisperModelManager: NSObject, ObservableObject {
         return catalog.first { $0.id == activeModelID }
     }
 
+    var activeModelIsReady: Bool {
+        guard let activeModel else { return false }
+        return WhisperModelStorage.isInstalled(activeModel)
+    }
+
+    var hasAvailabilityFailure: Bool {
+        if let activeModel { return state(for: activeModel).isFailure }
+        return states.values.contains { $0.isFailure }
+    }
+
     func state(for model: WhisperModelDescriptor) -> WhisperModelState {
         states[model.id] ?? .notInstalled
     }
@@ -168,9 +178,8 @@ final class WhisperModelManager: NSObject, ObservableObject {
         for model in catalog {
             states[model.id] = WhisperModelStorage.isInstalled(model) ? .installed : .notInstalled
         }
-        if let activeModelID, !(states[activeModelID]?.isInstalled ?? false) {
-            self.activeModelID = nil
-            UserDefaults.standard.removeObject(forKey: Self.activeModelKey)
+        if let activeModel, !state(for: activeModel).isInstalled {
+            states[activeModel.id] = .failed("The selected Whisper model is missing or incomplete. Download it again.")
         }
     }
 
@@ -212,6 +221,13 @@ final class WhisperModelManager: NSObject, ObservableObject {
             return true
         }) {}
         return hasher.finalize().map { String(format: "%02x", $0) }.joined()
+    }
+}
+
+private extension WhisperModelState {
+    var isFailure: Bool {
+        if case .failed = self { return true }
+        return false
     }
 }
 

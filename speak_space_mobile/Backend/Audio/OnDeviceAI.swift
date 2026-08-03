@@ -59,6 +59,8 @@ final class OnDevicePipeline: ObservableObject {
     @Published private(set) var phase: Phase = .idle
     @Published var lastError: String?
     @Published private(set) var audioLevel: Double = 0
+    @Published private(set) var textModelRuntimeFailed = false
+    @Published private(set) var whisperRuntimeFailed = false
 
     private var recorder: AVAudioRecorder?
     private var recordingURL: URL?
@@ -141,7 +143,21 @@ final class OnDevicePipeline: ObservableObject {
         phase = .preparingTranscriptionModel
         await Task.yield()
         phase = .transcribing
-        let transcript = try await LocalWhisperEngine.shared.transcribe(audioURL: url)
+        let transcript: String
+        do {
+            transcript = try await LocalWhisperEngine.shared.transcribe(audioURL: url)
+            whisperRuntimeFailed = false
+        } catch {
+            if let whisperError = error as? LocalWhisperError {
+                switch whisperError {
+                case .noSelectedModel, .loadFailed, .transcriptionFailed:
+                    whisperRuntimeFailed = true
+                case .audioDecodeFailed, .emptyTranscript:
+                    whisperRuntimeFailed = false
+                }
+            }
+            throw error
+        }
         let savedAudioURL = try persistRecording(at: url)
         return ProcessedVoiceNote(
             transcript: transcript,
@@ -187,8 +203,15 @@ final class OnDevicePipeline: ObservableObject {
                 "Download and select a local model in Local AI Models before creating a \(type.progressLabel)."
             )
         }
-        return try await withModelTimeout(seconds: 30) {
-            try await LocalLlamaEngine.shared.generate(from: text, type: type)
+        do {
+            let output = try await withModelTimeout(seconds: 30) {
+                try await LocalLlamaEngine.shared.generate(from: text, type: type)
+            }
+            textModelRuntimeFailed = false
+            return output
+        } catch {
+            textModelRuntimeFailed = true
+            throw error
         }
     }
 
