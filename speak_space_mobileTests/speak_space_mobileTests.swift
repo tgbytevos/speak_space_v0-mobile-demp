@@ -5,6 +5,7 @@
 //  Created by tom on 30/07/2026.
 //
 
+import Foundation
 import Testing
 @testable import speak_space_mobile
 
@@ -40,6 +41,33 @@ struct speak_space_mobileTests {
 
         #expect(prompt.contains(String(repeating: "a", count: LocalNotePrompt.maximumInputCharacters)))
         #expect(!prompt.contains(String(repeating: "a", count: LocalNotePrompt.maximumInputCharacters + 1)))
+    }
+
+    @Test func whisperCatalogContainsOnlyMultilingualModels() {
+        let models = WhisperModelDescriptor.catalog
+
+        #expect(models.allSatisfy { !$0.filename.contains(".en") })
+        #expect(models.allSatisfy { $0.detail.contains("Multilingual") })
+        #expect(models.allSatisfy { $0.downloadURL.scheme == "https" })
+        #expect(Set(models.map(\.id)).count == models.count)
+    }
+
+    @Test func whisperInstallRequiresCompletePersistentFile() throws {
+        let directory = FileManager.default.temporaryDirectory
+            .appendingPathComponent("whisper-storage-test-\(UUID().uuidString)", isDirectory: true)
+        try FileManager.default.createDirectory(at: directory, withIntermediateDirectories: true)
+        defer { try? FileManager.default.removeItem(at: directory) }
+
+        let model = WhisperModelDescriptor.tiny
+        let modelURL = WhisperModelStorage.modelURL(for: model, in: directory)
+        #expect(!WhisperModelStorage.isInstalled(model, in: directory))
+
+        FileManager.default.createFile(atPath: modelURL.path, contents: nil)
+        let handle = try FileHandle(forWritingTo: modelURL)
+        try handle.truncate(atOffset: UInt64(model.expectedBytes))
+        try handle.close()
+
+        #expect(WhisperModelStorage.isInstalled(model, in: directory))
     }
 
 }

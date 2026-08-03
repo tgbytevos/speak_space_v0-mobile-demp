@@ -12,8 +12,10 @@ struct ContentView: View {
     @Query(sort: \WorkspaceEntity.sortOrder) private var workspaces: [WorkspaceEntity]
     @StateObject private var pipeline = OnDevicePipeline()
     @StateObject private var modelManager = LocalModelManager()
+    @StateObject private var whisperModelManager = WhisperModelManager()
     @State private var showingNewWorkspace = false
     @State private var showingModels = false
+    @State private var showingWhisperModels = false
     @State private var newWorkspaceTitle = ""
     @State private var microphonePermission = AVAudioApplication.shared.recordPermission
     @AppStorage("isDarkMode") private var isDarkMode = false
@@ -57,6 +59,12 @@ struct ContentView: View {
                     }
                     .accessibilityLabel("Local AI models")
                 }
+                ToolbarItem(placement: .topBarLeading) {
+                    Button { showingWhisperModels = true } label: {
+                        Image(systemName: "waveform.badge.mic")
+                    }
+                    .accessibilityLabel("Whisper transcription models")
+                }
                 ToolbarItem(placement: .topBarTrailing) {
                     Button { isDarkMode.toggle() } label: {
                         Image(systemName: isDarkMode ? "sun.max.fill" : "moon.fill")
@@ -73,6 +81,9 @@ struct ContentView: View {
             .sheet(isPresented: $showingModels) {
                 ModelLibraryView(manager: modelManager)
             }
+            .sheet(isPresented: $showingWhisperModels) {
+                WhisperModelLibraryView(manager: whisperModelManager)
+            }
             .alert("New Workspace", isPresented: $showingNewWorkspace) {
                 TextField("Name", text: $newWorkspaceTitle)
                 Button("Cancel", role: .cancel) { newWorkspaceTitle = "" }
@@ -85,7 +96,10 @@ struct ContentView: View {
                 refreshPermissionState()
             }
             .onChange(of: scenePhase) { _, phase in
-                if phase == .active { refreshPermissionState() }
+                if phase == .active {
+                    refreshPermissionState()
+                    whisperModelManager.refreshInstalledModels()
+                }
             }
         }
         .preferredColorScheme(isDarkMode ? .dark : .light)
@@ -94,6 +108,19 @@ struct ContentView: View {
     @ViewBuilder
     private var setupNotices: some View {
         VStack(spacing: 8) {
+            if whisperModelManager.activeModel == nil {
+                SetupNotice(
+                    icon: "waveform.badge.mic",
+                    title: installedWhisperModelExists ? "No Whisper model is selected" : "No Whisper model is installed",
+                    message: installedWhisperModelExists
+                        ? "Select an installed multilingual Whisper model before recording."
+                        : "Download and select a multilingual Whisper model to transcribe Chinese, English, and mixed speech on this iPhone.",
+                    buttonTitle: installedWhisperModelExists ? "Select Whisper" : "Download Whisper"
+                ) {
+                    showingWhisperModels = true
+                }
+            }
+
             if modelManager.activeModel == nil {
                 SetupNotice(
                     icon: "cpu",
@@ -126,6 +153,10 @@ struct ContentView: View {
 
     private var installedModelExists: Bool {
         modelManager.catalog.contains { modelManager.state(for: $0).isInstalled }
+    }
+
+    private var installedWhisperModelExists: Bool {
+        whisperModelManager.catalog.contains { whisperModelManager.state(for: $0).isInstalled }
     }
 
     private func refreshPermissionState() {
@@ -933,6 +964,88 @@ private struct ModelLibraryView: View {
     }
 
     private func progress(for model: LocalModelDescriptor) -> Double {
+        if case .downloading(let value) = manager.state(for: model) { return value }
+        return 0
+    }
+}
+
+private struct WhisperModelLibraryView: View {
+    @Environment(\.dismiss) private var dismiss
+    @ObservedObject var manager: WhisperModelManager
+
+    var body: some View {
+        NavigationStack {
+            List {
+                Section {
+                    ForEach(manager.catalog) { model in
+                        VStack(alignment: .leading, spacing: 10) {
+                            HStack {
+                                VStack(alignment: .leading, spacing: 3) {
+                                    Text(model.displayName).font(.headline)
+                                    Text(model.detail).font(.caption).foregroundStyle(.secondary)
+                                }
+                                Spacer()
+                                status(for: model)
+                            }
+                            controls(for: model)
+                            if case .failed(let message) = manager.state(for: model) {
+                                Text(message)
+                                    .font(.caption)
+                                    .foregroundStyle(.red)
+                            }
+                        }
+                        .padding(.vertical, 6)
+                    }
+                } header: {
+                    Text("On-device transcription")
+                } footer: {
+                    Text("All options are multilingual whisper.cpp models. Downloads start only when you tap Download; voice recordings and transcripts stay on this iPhone.")
+                }
+            }
+            .navigationTitle("Whisper Models")
+            .navigationBarTitleDisplayMode(.inline)
+            .toolbar { Button("Done") { dismiss() } }
+        }
+    }
+
+    @ViewBuilder private func status(for model: WhisperModelDescriptor) -> some View {
+        switch manager.state(for: model) {
+        case .notInstalled: Text("Not installed").foregroundStyle(.secondary)
+        case .downloading(let value): Text("\(Int(value * 100))%").foregroundStyle(.tint)
+        case .verifying: Text("Verifying…").foregroundStyle(.secondary)
+        case .installed:
+            Label(manager.activeModelID == model.id ? "Selected" : "Installed",
+                  systemImage: "checkmark.circle.fill").foregroundStyle(.green)
+        case .failed(let message):
+            Label("Failed", systemImage: "exclamationmark.triangle.fill")
+                .foregroundStyle(.red)
+                .accessibilityHint(message)
+        }
+    }
+
+    @ViewBuilder private func controls(for model: WhisperModelDescriptor) -> some View {
+        switch manager.state(for: model) {
+        case .notInstalled, .failed:
+            Button("Download Whisper Model") { manager.download(model) }
+        case .downloading:
+            ProgressView(value: progress(for: model))
+            Button("Cancel", role: .destructive) { manager.cancelDownload() }
+        case .verifying:
+            ProgressView()
+        case .installed:
+            HStack {
+                if manager.activeModelID != model.id {
+                    Button("Use for Transcription") { manager.select(model) }
+                        .buttonStyle(.borderless)
+                }
+                Spacer()
+                Button("Delete", role: .destructive) { manager.delete(model) }
+                    .buttonStyle(.borderless)
+            }
+        }
+    }
+
+    private func progress(for model: WhisperModelDescriptor) -> Double {
         if case .downloading(let value) = manager.state(for: model) { return value }
         return 0
     }

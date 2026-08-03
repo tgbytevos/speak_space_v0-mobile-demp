@@ -5,19 +5,19 @@ A local-first iPhone voice workspace. Record a voice note, transcribe it on devi
 ## Project structure
 
 ```text
-speak_space_mobile/
-├── App/                         # App entry point and dependency wiring
-├── Frontend/
-│   └── Views/                   # SwiftUI screens and components
-├── Backend/
-│   ├── Audio/                   # Recording and on-device transcription
-│   ├── AI/                      # llama.cpp generation and local model downloads
-│   └── Persistence/             # SwiftData entities and recording storage
-├── Assets.xcassets/             # App resources
-└── ARCHITECTURE.md              # Responsibilities and data flow
-
-Packages/
-└── LlamaRuntime/                # llama.cpp binary Swift package
+.
+├── speak_space_mobile/
+│   ├── App/                     # App entry point and dependency wiring
+│   ├── Frontend/Views/          # SwiftUI screens and components
+│   ├── Backend/
+│   │   ├── Audio/               # Recording, Whisper downloads, local transcription
+│   │   ├── AI/                  # llama.cpp generation and local model downloads
+│   │   └── Persistence/         # SwiftData entities and recording storage
+│   ├── Assets.xcassets/         # App resources
+│   └── ARCHITECTURE.md          # Responsibilities and data flow
+└── Packages/
+    ├── LlamaRuntime/            # llama.cpp binary Swift package
+    └── WhisperRuntime/          # whisper.cpp binary Swift package
 ```
 
 ## Requirements

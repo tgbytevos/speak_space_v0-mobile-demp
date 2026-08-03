@@ -8,6 +8,7 @@
 
 /* Begin PBXBuildFile section */
 		AA0000010000000000000001 /* LlamaFramework in Frameworks */ = {isa = PBXBuildFile; productRef = AA0000030000000000000003 /* LlamaFramework */; };
+		BB0000010000000000000001 /* WhisperFramework in Frameworks */ = {isa = PBXBuildFile; productRef = BB0000030000000000000003 /* WhisperFramework */; };
 /* End PBXBuildFile section */
 
 /* Begin PBXContainerItemProxy section */
@@ -57,6 +58,7 @@
 			buildActionMask = 2147483647;
 			files = (
 				AA0000010000000000000001 /* LlamaFramework in Frameworks */,
+				BB0000010000000000000001 /* WhisperFramework in Frameworks */,
 			);
 			runOnlyForDeploymentPostprocessing = 0;
 		};
@@ -118,6 +120,7 @@
 			name = speak_space_mobile;
 			packageProductDependencies = (
 				AA0000030000000000000003 /* LlamaFramework */,
+				BB0000030000000000000003 /* WhisperFramework */,
 			);
 			productName = speak_space_mobile;
 			productReference = E2E31EEA301B4EC50057E4C1 /* speak_space_mobile.app */;
@@ -203,6 +206,7 @@
 			minimizedProjectReferenceProxies = 1;
 			packageReferences = (
 				AA0000020000000000000002 /* XCLocalSwiftPackageReference "Packages/LlamaRuntime" */,
+				BB0000020000000000000002 /* XCLocalSwiftPackageReference "Packages/WhisperRuntime" */,
 			);
 			preferredProjectObjectVersion = 77;
 			productRefGroup = E2E31EEB301B4EC50057E4C1 /* Products */;
@@ -405,7 +409,6 @@
 				ENABLE_USER_SELECTED_FILES = readonly;
 				GENERATE_INFOPLIST_FILE = YES;
 				INFOPLIST_KEY_NSMicrophoneUsageDescription = "Speak Space records your voice notes on this iPhone.";
-				INFOPLIST_KEY_NSSpeechRecognitionUsageDescription = "Speak Space transcribes your voice notes on this iPhone.";
 				"INFOPLIST_KEY_UIApplicationSceneManifest_Generation[sdk=iphoneos*]" = YES;
 				"INFOPLIST_KEY_UIApplicationSceneManifest_Generation[sdk=iphonesimulator*]" = YES;
 				"INFOPLIST_KEY_UIApplicationSupportsIndirectInputEvents[sdk=iphoneos*]" = YES;
@@ -448,7 +451,6 @@
 				ENABLE_USER_SELECTED_FILES = readonly;
 				GENERATE_INFOPLIST_FILE = YES;
 				INFOPLIST_KEY_NSMicrophoneUsageDescription = "Speak Space records your voice notes on this iPhone.";
-				INFOPLIST_KEY_NSSpeechRecognitionUsageDescription = "Speak Space transcribes your voice notes on this iPhone.";
 				"INFOPLIST_KEY_UIApplicationSceneManifest_Generation[sdk=iphoneos*]" = YES;
 				"INFOPLIST_KEY_UIApplicationSceneManifest_Generation[sdk=iphonesimulator*]" = YES;
 				"INFOPLIST_KEY_UIApplicationSupportsIndirectInputEvents[sdk=iphoneos*]" = YES;
@@ -614,12 +616,20 @@
 			isa = XCLocalSwiftPackageReference;
 			relativePath = Packages/LlamaRuntime;
 		};
+		BB0000020000000000000002 /* XCLocalSwiftPackageReference "Packages/WhisperRuntime" */ = {
+			isa = XCLocalSwiftPackageReference;
+			relativePath = Packages/WhisperRuntime;
+		};
 /* End XCLocalSwiftPackageReference section */
 
 /* Begin XCSwiftPackageProductDependency section */
 		AA0000030000000000000003 /* LlamaFramework */ = {
 			isa = XCSwiftPackageProductDependency;
 			productName = LlamaFramework;
+		};
+		BB0000030000000000000003 /* WhisperFramework */ = {
+			isa = XCSwiftPackageProductDependency;
+			productName = WhisperFramework;
 		};
 /* End XCSwiftPackageProductDependency section */
 	};

@@ -2,13 +2,10 @@
 import AVFoundation
 import Combine
 import Foundation
-import Speech
 
 enum OnDeviceAIError: LocalizedError {
     case microphoneDenied
-    case speechRecognitionDenied
     case noRecording
-    case unsupportedLocale
     case emptyTranscript
     case modelUnavailable(String)
     case modelTimedOut
@@ -18,12 +15,8 @@ enum OnDeviceAIError: LocalizedError {
         switch self {
         case .microphoneDenied:
             return "Microphone access is required. Enable it in Settings → Privacy & Security → Microphone."
-        case .speechRecognitionDenied:
-            return "Speech recognition access is required. Enable it in Settings → Privacy & Security → Speech Recognition."
         case .noRecording:
             return "No recording is available to transcribe."
-        case .unsupportedLocale:
-            return "On-device transcription does not support the current language."
         case .emptyTranscript:
             return "No speech was detected in the recording."
         case .modelUnavailable(let reason):
@@ -48,7 +41,7 @@ final class OnDevicePipeline: ObservableObject {
     enum Phase: Equatable {
         case idle
         case recording
-        case preparingSpeechModel
+        case preparingTranscriptionModel
         case transcribing
         case generating
 
@@ -56,7 +49,7 @@ final class OnDevicePipeline: ObservableObject {
             switch self {
             case .idle: return "Ready"
             case .recording: return "Recording…"
-            case .preparingSpeechModel: return "Preparing offline speech model…"
+            case .preparingTranscriptionModel: return "Loading selected Whisper model…"
             case .transcribing: return "Transcribing on this iPhone…"
             case .generating: return "Creating summary on this iPhone…"
             }
@@ -75,6 +68,9 @@ final class OnDevicePipeline: ObservableObject {
 
     func startRecording() async throws {
         lastError = nil
+        guard WhisperModelStorage.selectedModel() != nil else {
+            throw LocalWhisperError.noSelectedModel
+        }
         let granted = await AVAudioApplication.requestRecordPermission()
         guard granted else { throw OnDeviceAIError.microphoneDenied }
 
@@ -94,12 +90,14 @@ final class OnDevicePipeline: ObservableObject {
 
         let url = FileManager.default.temporaryDirectory
             .appendingPathComponent("voice-note-\(UUID().uuidString)")
-            .appendingPathExtension("m4a")
+            .appendingPathExtension("wav")
         let settings: [String: Any] = [
-            AVFormatIDKey: Int(kAudioFormatMPEG4AAC),
+            AVFormatIDKey: Int(kAudioFormatLinearPCM),
             AVSampleRateKey: 16_000,
             AVNumberOfChannelsKey: 1,
-            AVEncoderAudioQualityKey: AVAudioQuality.high.rawValue
+            AVLinearPCMBitDepthKey: 16,
+            AVLinearPCMIsBigEndianKey: false,
+            AVLinearPCMIsFloatKey: false
         ]
         let recorder: AVAudioRecorder
         do {
@@ -128,7 +126,7 @@ final class OnDevicePipeline: ObservableObject {
         try? AVAudioSession.sharedInstance().setActive(false, options: .notifyOthersOnDeactivation)
     }
 
-    func finishAndProcess(locale requestedLocale: Locale = .current) async throws -> ProcessedVoiceNote {
+    func finishAndProcess() async throws -> ProcessedVoiceNote {
         stopMetering()
         recorder?.stop()
         recorder = nil
@@ -140,7 +138,10 @@ final class OnDevicePipeline: ObservableObject {
             phase = .idle
         }
 
-        let transcript = try await transcribe(url: url, locale: requestedLocale)
+        phase = .preparingTranscriptionModel
+        await Task.yield()
+        phase = .transcribing
+        let transcript = try await LocalWhisperEngine.shared.transcribe(audioURL: url)
         let savedAudioURL = try persistRecording(at: url)
         return ProcessedVoiceNote(
             transcript: transcript,
@@ -210,59 +211,6 @@ final class OnDevicePipeline: ObservableObject {
                 try? await Task.sleep(for: .seconds(seconds))
                 await race.resolve(.failure(OnDeviceAIError.modelTimedOut))
             }
-        }
-    }
-
-    private func transcribe(url: URL, locale requestedLocale: Locale) async throws -> String {
-        phase = .preparingSpeechModel
-        var authorization = SFSpeechRecognizer.authorizationStatus()
-        if authorization == .notDetermined {
-            authorization = await withCheckedContinuation { continuation in
-                SFSpeechRecognizer.requestAuthorization { status in
-                    continuation.resume(returning: status)
-                }
-            }
-        }
-        guard authorization == .authorized else { throw OnDeviceAIError.speechRecognitionDenied }
-        guard SpeechTranscriber.isAvailable else { throw OnDeviceAIError.unsupportedLocale }
-        let requestedMatch = await SpeechTranscriber.supportedLocale(equivalentTo: requestedLocale)
-        let englishFallback = await SpeechTranscriber.supportedLocale(equivalentTo: Locale(identifier: "en-US"))
-        guard let locale = requestedMatch ?? englishFallback else {
-            throw OnDeviceAIError.unsupportedLocale
-        }
-
-        let transcriber = SpeechTranscriber(locale: locale, preset: .transcription)
-        if let request = try await AssetInventory.assetInstallationRequest(supporting: [transcriber]) {
-            try await request.downloadAndInstall()
-        }
-
-        phase = .transcribing
-        let audioFile = try AVAudioFile(forReading: url)
-        let analyzer = SpeechAnalyzer(modules: [transcriber])
-        let resultTask = Task { () throws -> [String] in
-            var chunks: [String] = []
-            for try await result in transcriber.results {
-                let text = String(result.text.characters).trimmingCharacters(in: .whitespacesAndNewlines)
-                if !text.isEmpty { chunks.append(text) }
-            }
-            return chunks
-        }
-
-        do {
-            let lastTime = try await analyzer.analyzeSequence(from: audioFile)
-            if let lastTime {
-                try await analyzer.finalizeAndFinish(through: lastTime)
-            } else {
-                try await analyzer.finalizeAndFinishThroughEndOfInput()
-            }
-            let transcript = try await resultTask.value.joined(separator: " ")
-                .trimmingCharacters(in: .whitespacesAndNewlines)
-            guard !transcript.isEmpty else { throw OnDeviceAIError.emptyTranscript }
-            return transcript
-        } catch {
-            resultTask.cancel()
-            await analyzer.cancelAndFinishNow()
-            throw error
         }
     }
 
