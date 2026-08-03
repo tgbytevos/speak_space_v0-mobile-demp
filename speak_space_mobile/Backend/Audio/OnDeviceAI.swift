@@ -22,7 +22,7 @@ enum OnDeviceAIError: LocalizedError {
         case .modelUnavailable(let reason):
             return reason
         case .modelTimedOut:
-            return "The local model timed out after 30 seconds. Try again, reload the model, or select a smaller model."
+            return "The local model timed out before completing. Try again, reload the model, or select a smaller model."
         case .audioSetupFailed(let step):
             return "Audio setup failed while \(step). Please try again."
         }
@@ -204,7 +204,8 @@ final class OnDevicePipeline: ObservableObject {
             )
         }
         do {
-            let output = try await withModelTimeout(seconds: 30) {
+            let timeout = type == .summary ? 90.0 : 30.0
+            let output = try await withModelTimeout(seconds: timeout) {
                 try await LocalLlamaEngine.shared.generate(from: text, type: type)
             }
             textModelRuntimeFailed = false

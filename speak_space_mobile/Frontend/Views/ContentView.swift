@@ -539,8 +539,18 @@ private struct AudioWaveformView: View {
     }
 }
 
+enum VoiceNoteContentPane: String, CaseIterable {
+    case transcript = "Transcript"
+    case aiCreation = "AI Creation"
+
+    static func initial(hasAICreation: Bool) -> Self {
+        hasAICreation ? .aiCreation : .transcript
+    }
+}
+
 private struct VoiceNoteCard: View {
     @Environment(\.modelContext) private var modelContext
+    @Environment(\.accessibilityReduceMotion) private var reduceMotion
     let note: NoteEntity
     @ObservedObject var pipeline: OnDevicePipeline
     let onChange: () -> Void
@@ -551,6 +561,7 @@ private struct VoiceNoteCard: View {
     @State private var editingCreation: NoteGenerationType?
     @State private var creationDraft = ""
     @State private var copiedCreation: NoteGenerationType?
+    @State private var selectedPane: VoiceNoteContentPane
     @StateObject private var audioPlayer: NoteAudioPlayer
 
     init(
@@ -562,6 +573,7 @@ private struct VoiceNoteCard: View {
         self.pipeline = pipeline
         self.onChange = onChange
         _transcriptDraft = State(initialValue: note.content)
+        _selectedPane = State(initialValue: .initial(hasAICreation: note.summary != nil || note.todo != nil))
         _audioPlayer = StateObject(wrappedValue: NoteAudioPlayer(
             url: RecordingFileStore.resolve(note.audioPath),
             storedDuration: note.audioDuration
@@ -587,21 +599,40 @@ private struct VoiceNoteCard: View {
             }
 
             if hasAICreation {
-                HStack(alignment: .top, spacing: 0) {
-                    transcriptColumn
-                        .frame(maxWidth: .infinity, maxHeight: .infinity, alignment: .topLeading)
+                VStack(spacing: 10) {
+                    Picker("Note content", selection: $selectedPane) {
+                        ForEach(VoiceNoteContentPane.allCases, id: \.self) { pane in
+                            Text(pane.rawValue).tag(pane)
+                        }
+                    }
+                    .pickerStyle(.segmented)
+                    .accessibilityHint("Switches between the transcript and generated AI content for this note")
 
-                    Divider()
-                        .padding(.horizontal, 10)
-
-                    aiColumn
-                        .frame(maxWidth: .infinity, maxHeight: .infinity, alignment: .topLeading)
+                    ZStack(alignment: .topLeading) {
+                        if selectedPane == .transcript {
+                            transcriptColumn
+                                .transition(transcriptPaneTransition)
+                        } else {
+                            aiColumn
+                                .transition(aiCreationPaneTransition)
+                        }
+                    }
+                    .frame(maxWidth: .infinity, maxHeight: .infinity, alignment: .topLeading)
+                    .clipped()
+                    .animation(reduceMotion ? nil : .easeInOut(duration: 0.28), value: selectedPane)
                 }
-                .frame(minHeight: 190, maxHeight: 270)
+                .frame(maxWidth: .infinity, alignment: .topLeading)
+                .frame(height: 270, alignment: .top)
             } else {
-                transcriptColumn
-                    .frame(maxWidth: .infinity, alignment: .topLeading)
-                    .frame(minHeight: 120)
+                VStack(alignment: .leading, spacing: 10) {
+                    transcriptColumn
+                        .frame(maxWidth: .infinity, alignment: .topLeading)
+
+                    if let generating {
+                        generationProgress(for: generating)
+                    }
+                }
+                .frame(minHeight: 120)
             }
         }
         .padding(16)
@@ -609,13 +640,30 @@ private struct VoiceNoteCard: View {
         .overlay(RoundedRectangle(cornerRadius: 18).stroke(.quaternary))
         .shadow(color: .black.opacity(0.04), radius: 8, y: 3)
         .onDisappear { audioPlayer.stop() }
+        .onChange(of: hasAICreation) { hadCreation, hasCreation in
+            if !hasCreation {
+                selectedPane = .transcript
+            } else if !hadCreation {
+                selectedPane = .aiCreation
+            }
+        }
         .alert("Couldn’t create content", isPresented: Binding(
             get: { errorMessage != nil }, set: { if !$0 { errorMessage = nil } }
         )) { Button("OK", role: .cancel) {} } message: { Text(errorMessage ?? "") }
     }
 
+    private var transcriptPaneTransition: AnyTransition {
+        guard !reduceMotion else { return .identity }
+        return .asymmetric(insertion: .move(edge: .leading), removal: .move(edge: .leading))
+    }
+
+    private var aiCreationPaneTransition: AnyTransition {
+        guard !reduceMotion else { return .identity }
+        return .asymmetric(insertion: .move(edge: .trailing), removal: .move(edge: .trailing))
+    }
+
     private var hasAICreation: Bool {
-        generating != nil || note.summary != nil || note.todo != nil
+        note.summary != nil || note.todo != nil
     }
 
     private var transcriptColumn: some View {
@@ -664,12 +712,7 @@ private struct VoiceNoteCard: View {
                 .foregroundStyle(.tint)
 
             if let generating {
-                HStack(spacing: 7) {
-                    ProgressView().controlSize(.small)
-                    Text("Creating \(generating.progressLabel)…")
-                }
-                .font(.caption)
-                .foregroundStyle(.secondary)
+                generationProgress(for: generating)
             }
 
             if note.summary == nil, note.todo == nil, generating == nil {
@@ -699,6 +742,17 @@ private struct VoiceNoteCard: View {
         }
     }
 
+    private func generationProgress(for type: NoteGenerationType) -> some View {
+        HStack(spacing: 7) {
+            ProgressView().controlSize(.small)
+            Text("Creating \(type.progressLabel)…")
+        }
+        .font(.caption)
+        .foregroundStyle(.secondary)
+        .accessibilityElement(children: .combine)
+        .accessibilityLabel("Creating \(type.progressLabel)")
+    }
+
     private var audioControls: some View {
         HStack(spacing: 7) {
             Button {
@@ -722,6 +776,7 @@ private struct VoiceNoteCard: View {
     private func beginEditing() {
         transcriptDraft = note.content
         isEditing = true
+        selectedPane = .transcript
     }
 
     private func cancelEditing() {
@@ -846,12 +901,14 @@ private struct VoiceNoteCard: View {
 
     private func generate(_ type: NoteGenerationType) {
         generating = type
+        if hasAICreation { selectedPane = .aiCreation }
         Task { @MainActor in
             defer { generating = nil }
             do {
                 let output = try await pipeline.generateNote(from: note.content, type: type)
                 if type == .summary { note.summary = output } else { note.todo = output }
                 try modelContext.save()
+                selectedPane = .aiCreation
                 onChange()
             } catch { errorMessage = error.localizedDescription }
         }

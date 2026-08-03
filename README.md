@@ -2,6 +2,8 @@
 
 A local-first iPhone voice workspace. Record a voice note, transcribe it on device, edit and replay the transcript, then generate a summary or to-do list without sending workspace data to a server.
 
+The first-release Summary evidence and coverage pipeline targets English notes. Multilingual Whisper transcription remains available independently.
+
 ## Project structure
 
 ```text
