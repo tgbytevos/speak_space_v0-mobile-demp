@@ -2,20 +2,7 @@
 import AVFoundation
 import Combine
 import Foundation
-import FoundationModels
 import Speech
-
-@Generable(description: "Structured information extracted from a voice note")
-struct GeneratedNoteContent {
-    @Guide(description: "A concise title in the same language as the transcript")
-    var title: String
-
-    @Guide(description: "A factual two-sentence summary in the same language as the transcript")
-    var summary: String
-
-    @Guide(description: "Concrete action items only. Return an empty list when there are none", .maximumCount(6))
-    var todos: [String]
-}
 
 enum OnDeviceAIError: LocalizedError {
     case microphoneDenied
@@ -194,19 +181,13 @@ final class OnDevicePipeline: ObservableObject {
     func generateNote(from text: String, type: NoteGenerationType) async throws -> String {
         phase = .generating
         defer { phase = .idle }
-        if UserDefaults.standard.string(forKey: LocalModelManager.activeModelKey) != nil {
-            return try await withModelTimeout(seconds: 30) {
-                try await LocalLlamaEngine.shared.generate(from: text, type: type)
-            }
+        guard UserDefaults.standard.string(forKey: LocalModelManager.activeModelKey) != nil else {
+            throw OnDeviceAIError.modelUnavailable(
+                "Download and select a local model in Local AI Models before creating a \(type.progressLabel)."
+            )
         }
-        let generated = try await generate(from: text)
-        switch type {
-        case .summary:
-            return generated.summary
-        case .todo:
-            return generated.todos.isEmpty
-                ? "No actionable items found."
-                : generated.todos.enumerated().map { "\($0.offset + 1). \($0.element)" }.joined(separator: "\n")
+        return try await withModelTimeout(seconds: 30) {
+            try await LocalLlamaEngine.shared.generate(from: text, type: type)
         }
     }
 
@@ -285,53 +266,6 @@ final class OnDevicePipeline: ObservableObject {
         }
     }
 
-    private func generate(from transcript: String) async throws -> GeneratedNoteContent {
-        phase = .generating
-        let model = SystemLanguageModel.default
-        switch model.availability {
-        case .available:
-            break
-        case .unavailable(.deviceNotEligible):
-            throw OnDeviceAIError.modelUnavailable("This iPhone does not support Apple Intelligence. The transcript can still be saved without an AI summary.")
-        case .unavailable(.appleIntelligenceNotEnabled):
-            throw OnDeviceAIError.modelUnavailable("Turn on Apple Intelligence in Settings to create summaries locally.")
-        case .unavailable(.modelNotReady):
-            throw OnDeviceAIError.modelUnavailable("The on-device language model is still downloading. Try again when it is ready.")
-        case .unavailable:
-            throw OnDeviceAIError.modelUnavailable("The on-device language model is currently unavailable.")
-        }
-
-        let chunks = transcript.chunked(maxCharacters: 2_400)
-        var generatedChunks: [GeneratedNoteContent] = []
-        for (index, chunk) in chunks.enumerated() {
-            let context = chunks.count == 1 ? "voice note" : "part \(index + 1) of \(chunks.count)"
-            generatedChunks.append(try await generateSingle(from: chunk, context: context, model: model))
-        }
-        guard generatedChunks.count > 1 else { return generatedChunks[0] }
-
-        let combined = generatedChunks.enumerated().map { index, item in
-            let todos = item.todos.isEmpty ? "None" : item.todos.joined(separator: "; ")
-            return "Part \(index + 1) summary: \(item.summary)\nAction items: \(todos)"
-        }.joined(separator: "\n\n")
-        return try await generateSingle(from: combined, context: "combined summaries of a longer recording", model: model)
-    }
-
-    private func generateSingle(
-        from text: String,
-        context: String,
-        model: SystemLanguageModel
-    ) async throws -> GeneratedNoteContent {
-        let session = LanguageModelSession(
-            model: model,
-            instructions: "You organize voice notes. Never invent facts. Preserve the transcript language. Return short, useful output."
-        )
-        let response = try await session.respond(
-            to: "Create a title, summary, and action items from this \(context):\n\n\(text)",
-            generating: GeneratedNoteContent.self,
-            options: GenerationOptions(temperature: 0.2, maximumResponseTokens: 500)
-        )
-        return response.content
-    }
 }
 
 private actor ModelTimeoutRace<Value: Sendable> {
@@ -364,23 +298,5 @@ private extension String {
         return String(trimmed.prefix(36))
     }
 
-    func chunked(maxCharacters: Int) -> [String] {
-        guard count > maxCharacters else { return [self] }
-        var chunks: [String] = []
-        var start = startIndex
-        while start < endIndex {
-            let proposedEnd = index(start, offsetBy: maxCharacters, limitedBy: endIndex) ?? endIndex
-            var end = proposedEnd
-            if proposedEnd < endIndex,
-               let boundary = self[start..<proposedEnd].lastIndex(where: { ".!?。！？\n".contains($0) }),
-               distance(from: start, to: boundary) > maxCharacters / 2 {
-                end = index(after: boundary)
-            }
-            let chunk = self[start..<end].trimmingCharacters(in: .whitespacesAndNewlines)
-            if !chunk.isEmpty { chunks.append(chunk) }
-            start = end
-        }
-        return chunks
-    }
 }
 #endif

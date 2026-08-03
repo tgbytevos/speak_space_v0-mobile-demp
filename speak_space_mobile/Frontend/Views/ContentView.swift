@@ -464,6 +464,9 @@ private struct VoiceNoteCard: View {
     @State private var errorMessage: String?
     @State private var isEditing = false
     @State private var transcriptDraft: String
+    @State private var editingCreation: NoteGenerationType?
+    @State private var creationDraft = ""
+    @State private var copiedCreation: NoteGenerationType?
     @StateObject private var audioPlayer: NoteAudioPlayer
 
     init(
@@ -601,10 +604,10 @@ private struct VoiceNoteCard: View {
                 ScrollView {
                     VStack(alignment: .leading, spacing: 9) {
                         if let summary = note.summary {
-                            creation(title: "Summary", icon: "text.alignleft", text: summary)
+                            creation(title: "Summary", icon: "text.alignleft", text: summary, type: .summary)
                         }
                         if let todo = note.todo {
-                            creation(title: "To-do", icon: "checklist", text: todo)
+                            creation(title: "To-do", icon: "checklist", text: todo, type: .todo)
                         }
                     }
                 }
@@ -656,14 +659,105 @@ private struct VoiceNoteCard: View {
         }
     }
 
-    private func creation(title: String, icon: String, text: String) -> some View {
+    private func creation(
+        title: String,
+        icon: String,
+        text: String,
+        type: NoteGenerationType
+    ) -> some View {
         VStack(alignment: .leading, spacing: 6) {
-            Label(title, systemImage: icon).font(.caption.weight(.bold)).foregroundStyle(.tint)
-            Text(text).font(.callout)
+            HStack(spacing: 8) {
+                Label(title, systemImage: icon)
+                    .font(.caption.weight(.bold))
+                    .foregroundStyle(.tint)
+                Spacer()
+
+                if copiedCreation == type {
+                    Label("Copied", systemImage: "checkmark")
+                        .font(.caption2.weight(.semibold))
+                        .foregroundStyle(.green)
+                        .accessibilityHidden(true)
+                }
+
+                Button {
+                    beginEditingCreation(type, text: text)
+                } label: {
+                    Image(systemName: "pencil")
+                }
+                .buttonStyle(.plain)
+                .accessibilityLabel("Edit \(title)")
+
+                Button {
+                    copyCreation(editingCreation == type ? creationDraft : text, title: title, type: type)
+                } label: {
+                    Image(systemName: "doc.on.doc")
+                }
+                .buttonStyle(.plain)
+                .accessibilityLabel("Copy \(title)")
+                .accessibilityHint("Copies the current \(title.lowercased()) to the clipboard")
+            }
+
+            if editingCreation == type {
+                TextEditor(text: $creationDraft)
+                    .font(.callout)
+                    .frame(minHeight: 90)
+                    .padding(5)
+                    .scrollContentBackground(.hidden)
+                    .background(.background, in: RoundedRectangle(cornerRadius: 9))
+
+                HStack(spacing: 8) {
+                    Button("Cancel") { cancelEditingCreation() }
+                        .font(.caption)
+                    Button("Save") { saveCreation(type) }
+                        .font(.caption.weight(.semibold))
+                        .buttonStyle(.borderedProminent)
+                        .controlSize(.small)
+                        .disabled(creationDraft.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty)
+                }
+            } else {
+                Text(text).font(.callout)
+            }
         }
         .frame(maxWidth: .infinity, alignment: .leading)
         .padding(9)
         .background(.secondary.opacity(0.08), in: RoundedRectangle(cornerRadius: 12))
+    }
+
+    private func beginEditingCreation(_ type: NoteGenerationType, text: String) {
+        creationDraft = text
+        editingCreation = type
+    }
+
+    private func cancelEditingCreation() {
+        editingCreation = nil
+        creationDraft = ""
+    }
+
+    private func saveCreation(_ type: NoteGenerationType) {
+        guard !creationDraft.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty else { return }
+        if type == .summary {
+            note.summary = creationDraft
+        } else {
+            note.todo = creationDraft
+        }
+        do {
+            try modelContext.save()
+            editingCreation = nil
+            creationDraft = ""
+            onChange()
+        } catch {
+            errorMessage = error.localizedDescription
+        }
+    }
+
+    private func copyCreation(_ text: String, title: String, type: NoteGenerationType) {
+        UIPasteboard.general.string = text
+        copiedCreation = type
+        UIAccessibility.post(notification: .announcement, argument: "\(title) copied")
+        Task { @MainActor in
+            try? await Task.sleep(for: .seconds(1.5))
+            if copiedCreation == type { copiedCreation = nil }
+        }
     }
 
     private func generate(_ type: NoteGenerationType) {

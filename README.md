@@ -11,7 +11,7 @@ speak_space_mobile/
 │   └── Views/                   # SwiftUI screens and components
 ├── Backend/
 │   ├── Audio/                   # Recording and on-device transcription
-│   ├── AI/                      # Apple Intelligence, Gemma, model downloads
+│   ├── AI/                      # llama.cpp generation and local model downloads
 │   └── Persistence/             # SwiftData entities and recording storage
 ├── Assets.xcassets/             # App resources
 └── ARCHITECTURE.md              # Responsibilities and data flow
