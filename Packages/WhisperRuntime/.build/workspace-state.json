@@ -1,0 +1,33 @@
+{
+  "object" : {
+    "artifacts" : [
+      {
+        "kind" : {
+          "xcframework" : {
+
+          }
+        },
+        "packageRef" : {
+          "identity" : "whisperruntime",
+          "kind" : "root",
+          "location" : "/Users/tg/speak_space_v0-mobile-demp/Packages/WhisperRuntime",
+          "name" : "WhisperRuntime"
+        },
+        "path" : "/Users/tg/speak_space_v0-mobile-demp/Packages/WhisperRuntime/.build/artifacts/whisperruntime/WhisperFramework/whisper.xcframework",
+        "source" : {
+          "checksum" : "8c3ecbe73f48b0cb9318fc3058264f951ab336fd530e82c4ccdd2298d1311a4c",
+          "type" : "remote",
+          "url" : "https://github.com/ggml-org/whisper.cpp/releases/download/v1.9.1/whisper-v1.9.1-xcframework.zip"
+        },
+        "targetName" : "WhisperFramework"
+      }
+    ],
+    "dependencies" : [
+
+    ],
+    "prebuilts" : [
+
+    ]
+  },
+  "version" : 7
+}
