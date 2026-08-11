@@ -95,20 +95,22 @@ final class AskTurnEntity {
     var answer: String
     var createdAt: Date
     var isGlobal: Bool = false
+    var isAppWide: Bool = false
 
-    init(id: UUID = UUID(), scopeID: UUID, question: String, answer: String, createdAt: Date = .now, isGlobal: Bool = false) {
+    init(id: UUID = UUID(), scopeID: UUID, question: String, answer: String, createdAt: Date = .now, isGlobal: Bool = false, isAppWide: Bool = false) {
         self.id = id
         self.scopeID = scopeID
         self.question = question
         self.answer = answer
         self.createdAt = createdAt
         self.isGlobal = isGlobal
+        self.isAppWide = isAppWide
     }
 }
 
-func deleteAskTurns(for scopeID: UUID, isGlobal: Bool = false, from context: ModelContext) {
+func deleteAskTurns(for scopeID: UUID, isGlobal: Bool = false, isAppWide: Bool = false, from context: ModelContext) {
     let descriptor = FetchDescriptor<AskTurnEntity>(predicate: #Predicate {
-        $0.scopeID == scopeID && $0.isGlobal == isGlobal
+        $0.scopeID == scopeID && $0.isGlobal == isGlobal && $0.isAppWide == isAppWide
     })
     for turn in (try? context.fetch(descriptor)) ?? [] { context.delete(turn) }
 }

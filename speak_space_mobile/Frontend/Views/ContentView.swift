@@ -44,12 +44,14 @@ struct ContentView: View {
     @Environment(\.scenePhase) private var scenePhase
     @Environment(\.modelContext) private var modelContext
     @Query(sort: \WorkspaceEntity.sortOrder) private var workspaces: [WorkspaceEntity]
+    @Query(sort: \NoteEntity.sortOrder) private var allNotes: [NoteEntity]
     @StateObject private var pipeline = OnDevicePipeline()
     @StateObject private var modelManager = LocalModelManager()
     @StateObject private var whisperModelManager = WhisperModelManager()
     @State private var showingNewWorkspace = false
     @State private var showingModels = false
     @State private var showingWhisperModels = false
+    @State private var showingAskAI = false
     @State private var newWorkspaceTitle = ""
     @State private var microphonePermission = AVAudioApplication.shared.recordPermission
     @AppStorage("isDarkMode") private var isDarkMode = false
@@ -102,6 +104,9 @@ struct ContentView: View {
                     .accessibilityLabel("Whisper transcription model: \(whisperModelReadiness.shortLabel)")
                 }
                 ToolbarItem(placement: .topBarTrailing) {
+                    Button("Ask AI", systemImage: "sparkles") { showingAskAI = true }
+                }
+                ToolbarItem(placement: .topBarTrailing) {
                     Button { isDarkMode.toggle() } label: {
                         Image(systemName: isDarkMode ? "sun.max.fill" : "moon.fill")
                     }
@@ -119,6 +124,14 @@ struct ContentView: View {
             }
             .sheet(isPresented: $showingWhisperModels) {
                 WhisperModelLibraryView(manager: whisperModelManager)
+            }
+            .sheet(isPresented: $showingAskAI) {
+                AskView(
+                    scopeID: AskMode.appScopeID,
+                    mode: .app,
+                    transcript: appAskTranscript,
+                    pipeline: pipeline
+                )
             }
             .alert("New Workspace", isPresented: $showingNewWorkspace) {
                 TextField("Name", text: $newWorkspaceTitle)
@@ -189,6 +202,10 @@ struct ContentView: View {
 
     private var installedModelExists: Bool {
         modelManager.catalog.contains { modelManager.state(for: $0).isInstalled }
+    }
+
+    private var appAskTranscript: String {
+        AppAskCorpus.transcript(workspaces: workspaces, notes: allNotes)
     }
 
     private var installedWhisperModelExists: Bool {
@@ -391,7 +408,7 @@ private struct WorkspaceView: View {
         .sheet(isPresented: $showingAsk) {
             AskView(
                 scopeID: workspace.id,
-                isGlobal: true,
+                mode: .workspace,
                 transcript: notes.map(\.content).joined(separator: "\n"),
                 pipeline: pipeline
             )
@@ -661,7 +678,7 @@ private struct VoiceNoteCard: View {
         .shadow(color: .black.opacity(0.04), radius: 8, y: 3)
         .onDisappear { audioPlayer.stop() }
         .sheet(isPresented: $showingAsk) {
-            AskView(scopeID: note.id, isGlobal: false, transcript: note.content, pipeline: pipeline)
+            AskView(scopeID: note.id, mode: .thread, transcript: note.content, pipeline: pipeline)
         }
         .onChange(of: hasAICreation) { hadCreation, hasCreation in
             if !hasCreation {
@@ -1018,12 +1035,33 @@ struct ThreadAskIndex {
     }
 }
 
+enum AskMode: Equatable {
+    case thread, workspace, app
+
+    static let appScopeID = UUID(uuidString: "00000000-0000-0000-0000-0000000000A1")!
+    var isGlobal: Bool { self == .workspace }
+    var isAppWide: Bool { self == .app }
+    var title: String { self == .thread ? "Thread Ask" : self == .workspace ? "Workspace Ask" : "Ask AI" }
+}
+
+enum AppAskCorpus {
+    @MainActor static func transcript(workspaces: [WorkspaceEntity], notes: [NoteEntity]) -> String {
+        notes.compactMap { note in
+            guard let workspace = workspaces.first(where: { $0.id == note.workspaceID }) else { return nil }
+            return note.content.split(whereSeparator: { "\n.!?;。！？；".contains($0) })
+                .map { "[Workspace: \(workspace.title)] [Thread: \(note.timeLabel), \(note.id)] \($0)" }
+                .joined(separator: "\n")
+        }
+        .joined(separator: "\n")
+    }
+}
+
 private struct AskView: View {
     @Environment(\.dismiss) private var dismiss
     @Environment(\.modelContext) private var modelContext
     @Query private var turns: [AskTurnEntity]
     let scopeID: UUID
-    let isGlobal: Bool
+    let mode: AskMode
     let transcript: String
     @ObservedObject var pipeline: OnDevicePipeline
     @State private var question = ""
@@ -1032,13 +1070,17 @@ private struct AskView: View {
     @State private var showingAllTurns = false
     @State private var index: ThreadAskIndex
 
-    init(scopeID: UUID, isGlobal: Bool, transcript: String, pipeline: OnDevicePipeline) {
+    init(scopeID: UUID, mode: AskMode, transcript: String, pipeline: OnDevicePipeline) {
+        let isGlobal = mode.isGlobal
+        let isAppWide = mode.isAppWide
         self.scopeID = scopeID
-        self.isGlobal = isGlobal
+        self.mode = mode
         self.transcript = transcript
         self.pipeline = pipeline
         _turns = Query(
-            filter: #Predicate<AskTurnEntity> { $0.scopeID == scopeID && $0.isGlobal == isGlobal },
+            filter: #Predicate<AskTurnEntity> {
+                $0.scopeID == scopeID && $0.isGlobal == isGlobal && $0.isAppWide == isAppWide
+            },
             sort: [SortDescriptor(\.createdAt)]
         )
         _index = State(initialValue: ThreadAskIndex(transcript: transcript))
@@ -1049,9 +1091,13 @@ private struct AskView: View {
             VStack(alignment: .leading, spacing: 16) {
                 if turns.isEmpty {
                     ContentUnavailableView(
-                        isGlobal ? "Ask this workspace" : "Ask this transcript",
+                        mode == .app ? "Ask all transcripts" : mode == .workspace ? "Ask this workspace" : "Ask this transcript",
                         systemImage: "questionmark.bubble",
-                        description: Text("The answer is generated on this iPhone from this transcript only.")
+                        description: Text(mode == .app
+                            ? "The answer is generated on this iPhone from all workspace transcripts."
+                            : mode == .workspace
+                                ? "The answer is generated on this iPhone from this workspace's transcripts."
+                                : "The answer is generated on this iPhone from this transcript only.")
                     )
                 } else {
                     ScrollView {
@@ -1087,11 +1133,11 @@ private struct AskView: View {
                         if isAnswering { ProgressView() } else { Image(systemName: "arrow.up.circle.fill") }
                     }
                     .disabled(isAnswering || question.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty)
-                    .accessibilityLabel(isGlobal ? "Ask workspace" : "Ask transcript")
+                    .accessibilityLabel(mode == .app ? "Ask AI" : mode == .workspace ? "Ask workspace" : "Ask transcript")
                 }
             }
             .padding()
-            .navigationTitle(isGlobal ? "Global Ask" : "Thread Ask")
+            .navigationTitle(mode.title)
             .navigationBarTitleDisplayMode(.inline)
             .toolbar { ToolbarItem(placement: .cancellationAction) { Button("Done") { dismiss() } } }
         }
@@ -1104,7 +1150,7 @@ private struct AskView: View {
     private func ask() {
         let trimmed = question.trimmingCharacters(in: .whitespacesAndNewlines)
         guard !trimmed.isEmpty else { return }
-        let evidence = index.segments(for: trimmed)
+        let evidence = index.segments(for: trimmed, limit: mode == .app ? 8 : 3)
         guard !evidence.isEmpty else {
             errorMessage = "No relevant transcript text was found."
             return
@@ -1120,7 +1166,8 @@ private struct AskView: View {
                     scopeID: scopeID,
                     question: trimmed,
                     answer: answer,
-                    isGlobal: isGlobal
+                    isGlobal: mode.isGlobal,
+                    isAppWide: mode.isAppWide
                 ))
                 try modelContext.save()
                 question = ""

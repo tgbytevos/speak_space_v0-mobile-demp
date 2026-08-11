@@ -87,6 +87,40 @@ struct speak_space_mobileTests {
         #expect(remaining.first?.isGlobal == false)
     }
 
+    @MainActor @Test func askAIHistoryStaysSeparateFromOtherAskModes() throws {
+        let schema = Schema([AskTurnEntity.self])
+        let container = try ModelContainer(
+            for: schema,
+            configurations: [ModelConfiguration(schema: schema, isStoredInMemoryOnly: true)]
+        )
+        let context = ModelContext(container)
+        let scopeID = AskMode.appScopeID
+        context.insert(AskTurnEntity(scopeID: scopeID, question: "App?", answer: "App.", isAppWide: true))
+        context.insert(AskTurnEntity(scopeID: scopeID, question: "Thread?", answer: "Thread."))
+        try context.save()
+
+        deleteAskTurns(for: scopeID, isAppWide: true, from: context)
+        try context.save()
+        let remaining = try context.fetch(FetchDescriptor<AskTurnEntity>())
+        #expect(remaining.count == 1)
+        #expect(remaining.first?.isAppWide == false)
+    }
+
+    @MainActor @Test func askAICorpusUsesOnlyTranscriptAndLabelsEverySource() {
+        let workspace = WorkspaceEntity(id: UUID(), title: "Launch", dateLabel: "Today", pinned: false, sortOrder: 0)
+        let note = NoteEntity(
+            id: UUID(), workspaceID: workspace.id, content: "Mia owns the demo.",
+            summary: "SECRET SUMMARY", todo: "SECRET TODO", timeLabel: "10:30", audioPath: nil, sortOrder: 0
+        )
+
+        let corpus = AppAskCorpus.transcript(workspaces: [workspace], notes: [note])
+        #expect(corpus.contains("[Workspace: Launch]"))
+        #expect(corpus.contains(note.id.uuidString))
+        #expect(corpus.contains("Mia owns the demo"))
+        #expect(!corpus.contains("SECRET SUMMARY"))
+        #expect(!corpus.contains("SECRET TODO"))
+    }
+
     @Test func reopeningThreadAskBuildsAnIndexFromTheLatestTranscript() {
         let oldIndex = ThreadAskIndex(transcript: "Mia owns the demo.")
         let updatedIndex = ThreadAskIndex(transcript: "Daniel owns the launch.")
