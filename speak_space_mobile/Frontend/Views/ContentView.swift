@@ -1183,7 +1183,8 @@ private struct AskView: View {
                 HStack { ProgressView(); Text("Thinking…") }.font(.callout)
             case .noMatch:
                 VStack(alignment: .leading, spacing: 8) {
-                    Text("I couldn't find enough support in the transcript.").font(.callout)
+                    Text("I couldn't find an answer in your transcripts. You can edit your question, or I can try to help using general knowledge.")
+                        .font(.callout)
                     HStack {
                         Button("Edit question") { editPendingQuestion() }
                         Button("Use AI knowledge") { answerPendingFromKnowledge() }
@@ -1204,7 +1205,7 @@ private struct AskView: View {
     private var pendingAccessibilityLabel: String {
         switch pendingState {
         case .thinking: "Thinking"
-        case .noMatch: "No supporting transcript source found. Edit the question or use AI knowledge."
+        case .noMatch: "I couldn't find an answer in your transcripts. Edit your question, or use AI knowledge."
         case .failed(let message): "Answer failed: \(message). Retry available."
         }
     }
