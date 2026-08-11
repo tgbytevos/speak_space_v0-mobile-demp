@@ -96,8 +96,9 @@ final class AskTurnEntity {
     var createdAt: Date
     var isGlobal: Bool = false
     var isAppWide: Bool = false
+    var hasTranscriptSource: Bool = true
 
-    init(id: UUID = UUID(), scopeID: UUID, question: String, answer: String, createdAt: Date = .now, isGlobal: Bool = false, isAppWide: Bool = false) {
+    init(id: UUID = UUID(), scopeID: UUID, question: String, answer: String, createdAt: Date = .now, isGlobal: Bool = false, isAppWide: Bool = false, hasTranscriptSource: Bool = true) {
         self.id = id
         self.scopeID = scopeID
         self.question = question
@@ -105,6 +106,7 @@ final class AskTurnEntity {
         self.createdAt = createdAt
         self.isGlobal = isGlobal
         self.isAppWide = isAppWide
+        self.hasTranscriptSource = hasTranscriptSource
     }
 }
 

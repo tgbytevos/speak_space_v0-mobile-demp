@@ -229,6 +229,14 @@ final class OnDevicePipeline: ObservableObject {
         }
     }
 
+    func answerFromKnowledge(question: String, history: [AskExchange] = []) async throws -> String {
+        phase = .generating
+        defer { phase = .idle }
+        return try await withModelTimeout(seconds: 90) {
+            try await LocalLlamaEngine.shared.answerFromKnowledge(question: question, history: history)
+        }
+    }
+
     private func withModelTimeout<T: Sendable>(
         seconds: Double,
         operation: @escaping @Sendable () async throws -> T

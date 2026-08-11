@@ -44,6 +44,14 @@ struct speak_space_mobileTests {
         #expect(prompt.contains("conversation context, not factual evidence"))
     }
 
+    @Test func localAskKnowledgeFallbackIsExplicitAndDoesNotClaimTranscriptGrounding() {
+        let prompt = LocalAskPrompt.knowledgeInstruction(question: "What is photosynthesis?")
+
+        #expect(prompt.contains("explicitly chose"))
+        #expect(prompt.contains("without transcript evidence"))
+        #expect(prompt.contains("Never claim the answer came from a transcript"))
+    }
+
     @MainActor @Test func askTurnsPersistAndStayScopedToTheirThread() throws {
         let schema = Schema([AskTurnEntity.self])
         let container = try ModelContainer(
@@ -104,6 +112,21 @@ struct speak_space_mobileTests {
         let remaining = try context.fetch(FetchDescriptor<AskTurnEntity>())
         #expect(remaining.count == 1)
         #expect(remaining.first?.isAppWide == false)
+    }
+
+    @MainActor @Test func askTurnPersistsMissingTranscriptSourceLabel() throws {
+        let schema = Schema([AskTurnEntity.self])
+        let container = try ModelContainer(
+            for: schema,
+            configurations: [ModelConfiguration(schema: schema, isStoredInMemoryOnly: true)]
+        )
+        let context = ModelContext(container)
+        context.insert(AskTurnEntity(
+            scopeID: UUID(), question: "Why?", answer: "General knowledge.", hasTranscriptSource: false
+        ))
+        try context.save()
+
+        #expect(try context.fetch(FetchDescriptor<AskTurnEntity>()).first?.hasTranscriptSource == false)
     }
 
     @MainActor @Test func askAICorpusUsesOnlyTranscriptAndLabelsEverySource() {

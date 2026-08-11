@@ -1057,6 +1057,7 @@ enum AppAskCorpus {
 }
 
 private struct AskView: View {
+    private enum PendingState: Equatable { case thinking, noMatch, failed(String) }
     @Environment(\.dismiss) private var dismiss
     @Environment(\.modelContext) private var modelContext
     @Query private var turns: [AskTurnEntity]
@@ -1065,8 +1066,11 @@ private struct AskView: View {
     let transcript: String
     @ObservedObject var pipeline: OnDevicePipeline
     @State private var question = ""
-    @State private var errorMessage: String?
     @State private var isAnswering = false
+    @State private var pendingQuestion: String?
+    @State private var pendingEvidence: [String] = []
+    @State private var pendingState: PendingState = .thinking
+    @State private var pendingUsesKnowledge = false
     @State private var showingAllTurns = false
     @State private var index: ThreadAskIndex
 
@@ -1089,7 +1093,7 @@ private struct AskView: View {
     var body: some View {
         NavigationStack {
             VStack(alignment: .leading, spacing: 16) {
-                if turns.isEmpty {
+                if turns.isEmpty, pendingQuestion == nil {
                     ContentUnavailableView(
                         mode == .app ? "Ask all transcripts" : mode == .workspace ? "Ask this workspace" : "Ask this transcript",
                         systemImage: "questionmark.bubble",
@@ -1100,27 +1104,37 @@ private struct AskView: View {
                                 : "The answer is generated on this iPhone from this transcript only.")
                     )
                 } else {
-                    ScrollView {
-                        LazyVStack(alignment: .leading, spacing: 12) {
-                            if turns.count > 4, !showingAllTurns {
-                                Button("Show \(turns.count - 4) earlier turns") { showingAllTurns = true }
-                                    .font(.caption)
-                            }
-                            ForEach(visibleTurns) { turn in
-                                VStack(alignment: .leading, spacing: 6) {
-                                    Text(turn.question).font(.callout.weight(.semibold))
-                                    Text(turn.answer).font(.callout).textSelection(.enabled)
+                    ScrollViewReader { proxy in
+                        ScrollView {
+                            LazyVStack(alignment: .leading, spacing: 12) {
+                                if turns.count > 4, !showingAllTurns {
+                                    Button("Show \(turns.count - 4) earlier turns") { showingAllTurns = true }
+                                        .font(.caption)
                                 }
-                                .frame(maxWidth: .infinity, alignment: .leading)
-                                .padding(10)
-                                .background(.secondary.opacity(0.08), in: RoundedRectangle(cornerRadius: 10))
+                                ForEach(visibleTurns) { turn in
+                                    VStack(alignment: .leading, spacing: 6) {
+                                        askBubble(turn.question, isUser: true)
+                                        askBubble(turn.answer, isUser: false)
+                                        Text(turn.hasTranscriptSource ? "Transcript-assisted" : "No transcript source")
+                                            .font(.caption2).foregroundStyle(.secondary)
+                                    }
+                                }
+                                if let pendingQuestion {
+                                    VStack(alignment: .leading, spacing: 6) {
+                                        askBubble(pendingQuestion, isUser: true)
+                                        pendingAssistantView
+                                    }
+                                    .id("pendingAsk")
+                                }
                             }
                         }
+                        .onChange(of: pendingQuestion) { _, value in
+                            if value != nil { proxy.scrollTo("pendingAsk", anchor: .bottom) }
+                        }
+                        .onChange(of: pendingState) { _, _ in
+                            proxy.scrollTo("pendingAsk", anchor: .bottom)
+                        }
                     }
-                }
-
-                if let errorMessage {
-                    Text(errorMessage).font(.caption).foregroundStyle(.red)
                 }
 
                 HStack {
@@ -1129,10 +1143,11 @@ private struct AskView: View {
                         .textFieldStyle(.roundedBorder)
                         .submitLabel(.send)
                         .onSubmit { ask() }
+                        .disabled(pendingQuestion != nil)
                     Button { ask() } label: {
                         if isAnswering { ProgressView() } else { Image(systemName: "arrow.up.circle.fill") }
                     }
-                    .disabled(isAnswering || question.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty)
+                    .disabled(pendingQuestion != nil || isAnswering || question.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty)
                     .accessibilityLabel(mode == .app ? "Ask AI" : mode == .workspace ? "Ask workspace" : "Ask transcript")
                 }
             }
@@ -1147,33 +1162,115 @@ private struct AskView: View {
         showingAllTurns ? turns[...] : turns.suffix(4)
     }
 
+    @ViewBuilder private func askBubble(_ text: String, isUser: Bool) -> some View {
+        if isUser {
+            Text(text).font(.callout)
+                .frame(maxWidth: .infinity, alignment: .trailing)
+                .padding(10)
+                .background(Color.accentColor.opacity(0.16), in: RoundedRectangle(cornerRadius: 10))
+        } else {
+            Text(text).font(.callout).textSelection(.enabled)
+                .frame(maxWidth: .infinity, alignment: .leading)
+                .padding(10)
+                .background(Color.secondary.opacity(0.08), in: RoundedRectangle(cornerRadius: 10))
+        }
+    }
+
+    private var pendingAssistantView: some View {
+        Group {
+            switch pendingState {
+            case .thinking:
+                HStack { ProgressView(); Text("Thinking…") }.font(.callout)
+            case .noMatch:
+                VStack(alignment: .leading, spacing: 8) {
+                    Text("I couldn't find enough support in the transcript.").font(.callout)
+                    HStack {
+                        Button("Edit question") { editPendingQuestion() }
+                        Button("Use AI knowledge") { answerPendingFromKnowledge() }
+                    }.buttonStyle(.bordered)
+                }
+            case .failed(let message):
+                VStack(alignment: .leading, spacing: 8) {
+                    Text(message).font(.caption).foregroundStyle(.red)
+                    Button("Retry") { retryPending() }.buttonStyle(.bordered)
+                }
+            }
+        }
+        .accessibilityElement(children: .combine)
+        .accessibilityLabel(pendingAccessibilityLabel)
+        .accessibilityAddTraits(.updatesFrequently)
+    }
+
+    private var pendingAccessibilityLabel: String {
+        switch pendingState {
+        case .thinking: "Thinking"
+        case .noMatch: "No supporting transcript source found. Edit the question or use AI knowledge."
+        case .failed(let message): "Answer failed: \(message). Retry available."
+        }
+    }
+
     private func ask() {
         let trimmed = question.trimmingCharacters(in: .whitespacesAndNewlines)
-        guard !trimmed.isEmpty else { return }
+        guard !trimmed.isEmpty, pendingQuestion == nil else { return }
         let evidence = index.segments(for: trimmed, limit: mode == .app ? 8 : 3)
+        question = ""
+        pendingQuestion = trimmed
+        pendingEvidence = evidence
+        pendingUsesKnowledge = false
         guard !evidence.isEmpty else {
-            errorMessage = "No relevant transcript text was found."
+            pendingState = .noMatch
             return
         }
+        answerPending()
+    }
+
+    private func answerPending() {
+        guard let pendingQuestion else { return }
         isAnswering = true
-        errorMessage = nil
+        pendingState = .thinking
         Task { @MainActor in
             defer { isAnswering = false }
+            var insertedTurn: AskTurnEntity?
             do {
                 let history = turns.map { AskExchange(question: $0.question, answer: $0.answer) }
-                let answer = try await pipeline.answer(question: trimmed, evidence: evidence, history: history)
-                modelContext.insert(AskTurnEntity(
+                let answer = pendingUsesKnowledge
+                    ? try await pipeline.answerFromKnowledge(question: pendingQuestion, history: history)
+                    : try await pipeline.answer(question: pendingQuestion, evidence: pendingEvidence, history: history)
+                let turn = AskTurnEntity(
                     scopeID: scopeID,
-                    question: trimmed,
+                    question: pendingQuestion,
                     answer: answer,
                     isGlobal: mode.isGlobal,
-                    isAppWide: mode.isAppWide
-                ))
+                    isAppWide: mode.isAppWide,
+                    hasTranscriptSource: !pendingUsesKnowledge
+                )
+                insertedTurn = turn
+                modelContext.insert(turn)
                 try modelContext.save()
-                question = ""
+                self.pendingQuestion = nil
+                pendingEvidence = []
             }
-            catch { errorMessage = error.localizedDescription }
+            catch {
+                if let insertedTurn { modelContext.delete(insertedTurn) }
+                pendingState = .failed(error.localizedDescription)
+            }
         }
+    }
+
+    private func answerPendingFromKnowledge() {
+        pendingUsesKnowledge = true
+        answerPending()
+    }
+
+    private func retryPending() {
+        answerPending()
+    }
+
+    private func editPendingQuestion() {
+        question = pendingQuestion ?? ""
+        pendingQuestion = nil
+        pendingEvidence = []
+        pendingUsesKnowledge = false
     }
 }
 
