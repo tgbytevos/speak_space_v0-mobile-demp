@@ -140,8 +140,12 @@ final class WhisperModelManager: NSObject, ObservableObject {
             return
         }
         states[model.id] = .installed
-        activeModelID = model.id
-        UserDefaults.standard.set(model.id, forKey: Self.activeModelKey)
+        activeModelID = LocalModelSelection.next(activeID: activeModelID, tappedID: model.id)
+        if let activeModelID {
+            UserDefaults.standard.set(activeModelID, forKey: Self.activeModelKey)
+        } else {
+            UserDefaults.standard.removeObject(forKey: Self.activeModelKey)
+        }
     }
 
     func download(_ model: WhisperModelDescriptor) {

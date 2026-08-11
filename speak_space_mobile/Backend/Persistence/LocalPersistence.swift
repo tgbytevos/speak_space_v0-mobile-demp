@@ -87,6 +87,32 @@ final class NoteEntity {
     }
 }
 
+@Model
+final class AskTurnEntity {
+    @Attribute(.unique) var id: UUID
+    var scopeID: UUID
+    var question: String
+    var answer: String
+    var createdAt: Date
+    var isGlobal: Bool = false
+
+    init(id: UUID = UUID(), scopeID: UUID, question: String, answer: String, createdAt: Date = .now, isGlobal: Bool = false) {
+        self.id = id
+        self.scopeID = scopeID
+        self.question = question
+        self.answer = answer
+        self.createdAt = createdAt
+        self.isGlobal = isGlobal
+    }
+}
+
+func deleteAskTurns(for scopeID: UUID, isGlobal: Bool = false, from context: ModelContext) {
+    let descriptor = FetchDescriptor<AskTurnEntity>(predicate: #Predicate {
+        $0.scopeID == scopeID && $0.isGlobal == isGlobal
+    })
+    for turn in (try? context.fetch(descriptor)) ?? [] { context.delete(turn) }
+}
+
 struct NoteSnapshot: Sendable {
     let id: UUID
     let content: String
@@ -113,12 +139,13 @@ final class LocalPersistenceStore {
 
     private init() {
         do {
-            container = try ModelContainer(for: WorkspaceEntity.self, NoteEntity.self)
+            container = try ModelContainer(for: WorkspaceEntity.self, NoteEntity.self, AskTurnEntity.self)
         } catch {
             let memoryOnly = ModelConfiguration(isStoredInMemoryOnly: true)
             container = try! ModelContainer(
                 for: WorkspaceEntity.self,
                 NoteEntity.self,
+                AskTurnEntity.self,
                 configurations: memoryOnly
             )
         }

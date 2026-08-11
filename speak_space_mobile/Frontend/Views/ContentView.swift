@@ -4,6 +4,7 @@ import SwiftUI
 #if os(iOS)
 import AVFoundation
 import Combine
+import NaturalLanguage
 import UIKit
 
 enum LocalSubsystemReadiness: Equatable {
@@ -250,9 +251,11 @@ struct ContentView: View {
             if let notes = try? modelContext.fetch(descriptor) {
                 for note in notes {
                     RecordingFileStore.delete(note.audioPath)
+                    deleteAskTurns(for: note.id, from: modelContext)
                     modelContext.delete(note)
                 }
             }
+            deleteAskTurns(for: id, isGlobal: true, from: modelContext)
             modelContext.delete(workspace)
         }
         try? modelContext.save()
@@ -349,6 +352,7 @@ private struct WorkspaceView: View {
     @State private var isRecording = false
     @State private var errorMessage: String?
     @State private var textDraft = ""
+    @State private var showingAsk = false
 
     var body: some View {
         ZStack(alignment: .bottom) {
@@ -378,6 +382,20 @@ private struct WorkspaceView: View {
         }
         .navigationTitle(workspace.title)
         .navigationBarTitleDisplayMode(.inline)
+        .toolbar {
+            ToolbarItem(placement: .topBarTrailing) {
+                Button { showingAsk = true } label: { Image(systemName: "questionmark.bubble") }
+                    .accessibilityLabel("Ask workspace")
+            }
+        }
+        .sheet(isPresented: $showingAsk) {
+            AskView(
+                scopeID: workspace.id,
+                isGlobal: true,
+                transcript: notes.map(\.content).joined(separator: "\n"),
+                pipeline: pipeline
+            )
+        }
         .task { refreshNotes() }
         .alert("Speak Space", isPresented: Binding(
             get: { errorMessage != nil },
@@ -561,6 +579,7 @@ private struct VoiceNoteCard: View {
     @State private var editingCreation: NoteGenerationType?
     @State private var creationDraft = ""
     @State private var copiedCreation: NoteGenerationType?
+    @State private var showingAsk = false
     @State private var selectedPane: VoiceNoteContentPane
     @StateObject private var audioPlayer: NoteAudioPlayer
 
@@ -588,6 +607,7 @@ private struct VoiceNoteCard: View {
                     .foregroundStyle(.secondary)
                 Spacer()
                 Menu {
+                    Button("Ask Transcript", systemImage: "questionmark.bubble") { showingAsk = true }
                     Button("Edit Transcript", systemImage: "pencil") { beginEditing() }
                     Button("Create Summary", systemImage: "text.alignleft") { generate(.summary) }
                     Button("Create To-do", systemImage: "checklist") { generate(.todo) }
@@ -640,6 +660,9 @@ private struct VoiceNoteCard: View {
         .overlay(RoundedRectangle(cornerRadius: 18).stroke(.quaternary))
         .shadow(color: .black.opacity(0.04), radius: 8, y: 3)
         .onDisappear { audioPlayer.stop() }
+        .sheet(isPresented: $showingAsk) {
+            AskView(scopeID: note.id, isGlobal: false, transcript: note.content, pipeline: pipeline)
+        }
         .onChange(of: hasAICreation) { hadCreation, hasCreation in
             if !hasCreation {
                 selectedPane = .transcript
@@ -916,9 +939,194 @@ private struct VoiceNoteCard: View {
 
     private func deleteNote() {
         RecordingFileStore.delete(note.audioPath)
+        deleteAskTurns(for: note.id, from: modelContext)
         modelContext.delete(note)
         try? modelContext.save()
         onChange()
+    }
+}
+
+enum ThreadAskRetrieval {
+    nonisolated static func segments(for question: String, in transcript: String, limit: Int = 3) -> [String] {
+        let chunks = transcript.split(whereSeparator: { "\n.!?;。！？；".contains($0) })
+            .map { $0.trimmingCharacters(in: .whitespacesAndNewlines) }
+            .filter { !$0.isEmpty }
+        let questionVector = vector(question)
+        guard !questionVector.isEmpty else { return [] }
+
+        return chunks.compactMap { chunk -> (Double, String)? in
+            let chunkVector = vector(chunk)
+            let dot = questionVector.reduce(0.0) { $0 + Double($1.value * chunkVector[$1.key, default: 0]) }
+            let magnitude = sqrt(Double(questionVector.values.reduce(0) { $0 + $1 * $1 }))
+                * sqrt(Double(chunkVector.values.reduce(0) { $0 + $1 * $1 }))
+            guard magnitude > 0, dot > 0 else { return nil }
+            return (dot / magnitude, chunk)
+        }
+        .sorted { $0.0 > $1.0 }
+        .prefix(limit)
+        .map(\.1)
+    }
+
+    private nonisolated static func vector(_ text: String) -> [String: Int] {
+        // ponytail: lexical vectors are the v1 ceiling; replace with embeddings in TASK-044.
+        let stopWords: Set<String> = ["a", "an", "are", "how", "is", "the", "what", "when", "where", "who", "why"]
+        return text.lowercased().split { !$0.isLetter && !$0.isNumber }.reduce(into: [:]) {
+            guard !stopWords.contains(String($1)) else { return }
+            $0[String($1), default: 0] += 1
+        }
+    }
+}
+
+struct ThreadAskIndex {
+    private let chunks: [String]
+    private let embedding: NLEmbedding?
+    private let vectors: [[Double]?]
+
+    init(transcript: String) {
+        let selectedChunks = transcript.split(whereSeparator: { "\n.!?;。！？；".contains($0) })
+            .map { $0.trimmingCharacters(in: .whitespacesAndNewlines) }
+            .filter { !$0.isEmpty }
+        let language = NLLanguageRecognizer.dominantLanguage(for: transcript) ?? .english
+        let selectedEmbedding = NLEmbedding.sentenceEmbedding(for: language)
+        chunks = selectedChunks
+        embedding = selectedEmbedding
+        vectors = selectedChunks.map { selectedEmbedding?.vector(for: $0) }
+    }
+
+    func segments(for question: String, limit: Int = 3) -> [String] {
+        guard let embedding, let query = embedding.vector(for: question) else {
+            return ThreadAskRetrieval.segments(for: question, in: chunks.joined(separator: ". "), limit: limit)
+        }
+        let matches = zip(chunks, vectors).compactMap { chunk, vector -> (Double, String)? in
+            guard let vector else { return nil }
+            let score = cosine(query, vector)
+            return score >= 0.45 ? (score, chunk) : nil
+        }
+        .sorted { $0.0 > $1.0 }
+        .prefix(limit)
+        .map(\.1)
+        return matches.isEmpty
+            ? ThreadAskRetrieval.segments(for: question, in: chunks.joined(separator: ". "), limit: limit)
+            : matches
+    }
+
+    private func cosine(_ lhs: [Double], _ rhs: [Double]) -> Double {
+        guard lhs.count == rhs.count else { return 0 }
+        let dot = zip(lhs, rhs).reduce(0.0) { $0 + $1.0 * $1.1 }
+        let magnitude = sqrt(lhs.reduce(0.0) { $0 + $1 * $1 }) * sqrt(rhs.reduce(0.0) { $0 + $1 * $1 })
+        return magnitude == 0 ? 0 : dot / magnitude
+    }
+}
+
+private struct AskView: View {
+    @Environment(\.dismiss) private var dismiss
+    @Environment(\.modelContext) private var modelContext
+    @Query private var turns: [AskTurnEntity]
+    let scopeID: UUID
+    let isGlobal: Bool
+    let transcript: String
+    @ObservedObject var pipeline: OnDevicePipeline
+    @State private var question = ""
+    @State private var errorMessage: String?
+    @State private var isAnswering = false
+    @State private var showingAllTurns = false
+    @State private var index: ThreadAskIndex
+
+    init(scopeID: UUID, isGlobal: Bool, transcript: String, pipeline: OnDevicePipeline) {
+        self.scopeID = scopeID
+        self.isGlobal = isGlobal
+        self.transcript = transcript
+        self.pipeline = pipeline
+        _turns = Query(
+            filter: #Predicate<AskTurnEntity> { $0.scopeID == scopeID && $0.isGlobal == isGlobal },
+            sort: [SortDescriptor(\.createdAt)]
+        )
+        _index = State(initialValue: ThreadAskIndex(transcript: transcript))
+    }
+
+    var body: some View {
+        NavigationStack {
+            VStack(alignment: .leading, spacing: 16) {
+                if turns.isEmpty {
+                    ContentUnavailableView(
+                        isGlobal ? "Ask this workspace" : "Ask this transcript",
+                        systemImage: "questionmark.bubble",
+                        description: Text("The answer is generated on this iPhone from this transcript only.")
+                    )
+                } else {
+                    ScrollView {
+                        LazyVStack(alignment: .leading, spacing: 12) {
+                            if turns.count > 4, !showingAllTurns {
+                                Button("Show \(turns.count - 4) earlier turns") { showingAllTurns = true }
+                                    .font(.caption)
+                            }
+                            ForEach(visibleTurns) { turn in
+                                VStack(alignment: .leading, spacing: 6) {
+                                    Text(turn.question).font(.callout.weight(.semibold))
+                                    Text(turn.answer).font(.callout).textSelection(.enabled)
+                                }
+                                .frame(maxWidth: .infinity, alignment: .leading)
+                                .padding(10)
+                                .background(.secondary.opacity(0.08), in: RoundedRectangle(cornerRadius: 10))
+                            }
+                        }
+                    }
+                }
+
+                if let errorMessage {
+                    Text(errorMessage).font(.caption).foregroundStyle(.red)
+                }
+
+                HStack {
+                    TextField("Ask a question…", text: $question, axis: .vertical)
+                        .lineLimit(1...4)
+                        .textFieldStyle(.roundedBorder)
+                        .submitLabel(.send)
+                        .onSubmit { ask() }
+                    Button { ask() } label: {
+                        if isAnswering { ProgressView() } else { Image(systemName: "arrow.up.circle.fill") }
+                    }
+                    .disabled(isAnswering || question.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty)
+                    .accessibilityLabel(isGlobal ? "Ask workspace" : "Ask transcript")
+                }
+            }
+            .padding()
+            .navigationTitle(isGlobal ? "Global Ask" : "Thread Ask")
+            .navigationBarTitleDisplayMode(.inline)
+            .toolbar { ToolbarItem(placement: .cancellationAction) { Button("Done") { dismiss() } } }
+        }
+    }
+
+    private var visibleTurns: ArraySlice<AskTurnEntity> {
+        showingAllTurns ? turns[...] : turns.suffix(4)
+    }
+
+    private func ask() {
+        let trimmed = question.trimmingCharacters(in: .whitespacesAndNewlines)
+        guard !trimmed.isEmpty else { return }
+        let evidence = index.segments(for: trimmed)
+        guard !evidence.isEmpty else {
+            errorMessage = "No relevant transcript text was found."
+            return
+        }
+        isAnswering = true
+        errorMessage = nil
+        Task { @MainActor in
+            defer { isAnswering = false }
+            do {
+                let history = turns.map { AskExchange(question: $0.question, answer: $0.answer) }
+                let answer = try await pipeline.answer(question: trimmed, evidence: evidence, history: history)
+                modelContext.insert(AskTurnEntity(
+                    scopeID: scopeID,
+                    question: trimmed,
+                    answer: answer,
+                    isGlobal: isGlobal
+                ))
+                try modelContext.save()
+                question = ""
+            }
+            catch { errorMessage = error.localizedDescription }
+        }
     }
 }
 
@@ -1066,9 +1274,11 @@ private struct ModelLibraryView: View {
             ProgressView()
         case .installed:
             HStack {
-                if manager.activeModelID != model.id { Button("Use Model") { manager.select(model) } }
+                Button(manager.activeModelID == model.id ? "Deselect" : "Use Model") { manager.select(model) }
+                    .buttonStyle(.borderless)
                 Spacer()
                 Button("Delete", role: .destructive) { manager.delete(model) }
+                    .buttonStyle(.borderless)
             }
         }
     }
@@ -1144,10 +1354,10 @@ private struct WhisperModelLibraryView: View {
             ProgressView()
         case .installed:
             HStack {
-                if manager.activeModelID != model.id {
-                    Button("Use for Transcription") { manager.select(model) }
-                        .buttonStyle(.borderless)
+                Button(manager.activeModelID == model.id ? "Deselect" : "Use for Transcription") {
+                    manager.select(model)
                 }
+                .buttonStyle(.borderless)
                 Spacer()
                 Button("Delete", role: .destructive) { manager.delete(model) }
                     .buttonStyle(.borderless)
@@ -1163,7 +1373,7 @@ private struct WhisperModelLibraryView: View {
 
 #Preview {
     ContentView()
-        .modelContainer(for: [WorkspaceEntity.self, NoteEntity.self], inMemory: true)
+        .modelContainer(for: [WorkspaceEntity.self, NoteEntity.self, AskTurnEntity.self], inMemory: true)
 }
 #else
 struct ContentView: View {

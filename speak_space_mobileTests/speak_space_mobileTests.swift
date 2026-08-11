@@ -6,10 +6,130 @@
 //
 
 import Foundation
+import SwiftData
 import Testing
 @testable import speak_space_mobile
 
 struct speak_space_mobileTests {
+
+    @Test func threadAskRetrievalSelectsOnlyRelevantTranscriptSegments() {
+        let transcript = "Mia owns the Friday demo. The database migration is next month. Daniel will prepare slides."
+
+        #expect(ThreadAskRetrieval.segments(for: "Who owns the Friday demo?", in: transcript) == [
+            "Mia owns the Friday demo"
+        ])
+        #expect(ThreadAskRetrieval.segments(for: "What is the catering budget?", in: transcript).isEmpty)
+    }
+
+    @Test func localAskPromptKeepsEvidenceSeparateAndGrounded() {
+        let prompt = LocalAskPrompt.instruction(question: "Who owns the demo?", evidence: ["Mia owns the demo."])
+
+        #expect(prompt.contains("using only TRANSCRIPT_EVIDENCE"))
+        #expect(prompt.contains("Mia owns the demo."))
+        #expect(prompt.contains("Who owns the demo?"))
+        #expect(prompt.contains("Never invent facts"))
+    }
+
+    @Test func localAskPromptIncludesPriorTurnsWithoutMixingThemIntoEvidence() {
+        let prompt = LocalAskPrompt.instruction(
+            question: "When is it?",
+            evidence: ["The demo is Friday."],
+            history: [AskExchange(question: "Who owns it?", answer: "Mia owns it.")]
+        )
+
+        #expect(prompt.contains("PRIOR_ASK_TURNS"))
+        #expect(prompt.contains("User: Who owns it?"))
+        #expect(prompt.contains("Assistant: Mia owns it."))
+        #expect(prompt.contains("The demo is Friday."))
+        #expect(prompt.contains("conversation context, not factual evidence"))
+    }
+
+    @MainActor @Test func askTurnsPersistAndStayScopedToTheirThread() throws {
+        let schema = Schema([AskTurnEntity.self])
+        let container = try ModelContainer(
+            for: schema,
+            configurations: [ModelConfiguration(schema: schema, isStoredInMemoryOnly: true)]
+        )
+        let context = ModelContext(container)
+        let firstThread = UUID()
+        let secondThread = UUID()
+        context.insert(AskTurnEntity(scopeID: firstThread, question: "Who?", answer: "Mia."))
+        context.insert(AskTurnEntity(scopeID: secondThread, question: "When?", answer: "Friday."))
+        try context.save()
+
+        let firstThreadTurns = try context.fetch(
+            FetchDescriptor<AskTurnEntity>(predicate: #Predicate { $0.scopeID == firstThread })
+        )
+        #expect(firstThreadTurns.count == 1)
+        #expect(firstThreadTurns.first?.answer == "Mia.")
+
+        deleteAskTurns(for: firstThread, from: context)
+        try context.save()
+        #expect(try context.fetch(FetchDescriptor<AskTurnEntity>()).map(\.scopeID) == [secondThread])
+    }
+
+    @MainActor @Test func globalAskTurnsStaySeparateFromThreadTurnsWithTheSameID() throws {
+        let schema = Schema([AskTurnEntity.self])
+        let container = try ModelContainer(
+            for: schema,
+            configurations: [ModelConfiguration(schema: schema, isStoredInMemoryOnly: true)]
+        )
+        let context = ModelContext(container)
+        let scopeID = UUID()
+        context.insert(AskTurnEntity(scopeID: scopeID, question: "Thread?", answer: "Thread.", isGlobal: false))
+        context.insert(AskTurnEntity(scopeID: scopeID, question: "Workspace?", answer: "Workspace.", isGlobal: true))
+        try context.save()
+
+        deleteAskTurns(for: scopeID, isGlobal: true, from: context)
+        try context.save()
+        let remaining = try context.fetch(FetchDescriptor<AskTurnEntity>())
+        #expect(remaining.count == 1)
+        #expect(remaining.first?.isGlobal == false)
+    }
+
+    @Test func reopeningThreadAskBuildsAnIndexFromTheLatestTranscript() {
+        let oldIndex = ThreadAskIndex(transcript: "Mia owns the demo.")
+        let updatedIndex = ThreadAskIndex(transcript: "Daniel owns the launch.")
+
+        #expect(oldIndex.segments(for: "Who owns the demo?").contains("Mia owns the demo"))
+        #expect(updatedIndex.segments(for: "Who owns the launch?").contains("Daniel owns the launch"))
+        #expect(updatedIndex.segments(for: "Who owns the demo?").isEmpty)
+    }
+
+    @Test func threadAskModelErrorsTellTheUserWhatToDo() {
+        #expect(LocalLlamaError.noSelectedModel.errorDescription?.contains("Local AI Models") == true)
+        #expect(OnDeviceAIError.modelTimedOut.errorDescription?.contains("timed out") == true)
+    }
+
+    @Test func tappingTheSelectedTextModelDeselectsWithoutDeletingIt() {
+        let modelID = LocalModelDescriptor.qwenHalfB.id
+
+        #expect(LocalModelSelection.next(activeID: nil, tappedID: modelID) == modelID)
+        #expect(LocalModelSelection.next(activeID: modelID, tappedID: modelID) == nil)
+    }
+
+    @Test @MainActor func tappingTheSelectedWhisperModelDeselectsWithoutDeletingIt() throws {
+        let model = WhisperModelDescriptor.tiny
+        let modelURL = WhisperModelStorage.modelURL(for: model)
+        try FileManager.default.createDirectory(at: modelURL.deletingLastPathComponent(), withIntermediateDirectories: true)
+        FileManager.default.createFile(atPath: modelURL.path, contents: nil)
+        let handle = try FileHandle(forWritingTo: modelURL)
+        try handle.truncate(atOffset: UInt64(model.expectedBytes))
+        try handle.close()
+        UserDefaults.standard.removeObject(forKey: WhisperModelManager.activeModelKey)
+        defer {
+            try? FileManager.default.removeItem(at: modelURL)
+            UserDefaults.standard.removeObject(forKey: WhisperModelManager.activeModelKey)
+        }
+
+        let manager = WhisperModelManager()
+        manager.select(model)
+        manager.select(model)
+
+        #expect(manager.activeModelID == nil)
+        #expect(manager.state(for: model).isInstalled)
+        #expect(FileManager.default.fileExists(atPath: modelURL.path))
+    }
 
     @Test func voiceNotePaneDefaultsMatchStoredAICreationState() {
         #expect(VoiceNoteContentPane.initial(hasAICreation: false) == .transcript)

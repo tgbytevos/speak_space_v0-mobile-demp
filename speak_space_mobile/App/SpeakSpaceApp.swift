@@ -33,7 +33,7 @@ final class PersistenceBootstrap: ObservableObject {
     @Published private(set) var container: ModelContainer?
     @Published private(set) var errorMessage: String?
 
-    private let schema = Schema([WorkspaceEntity.self, NoteEntity.self])
+    private let schema = Schema([WorkspaceEntity.self, NoteEntity.self, AskTurnEntity.self])
     private lazy var configuration = ModelConfiguration(schema: schema, isStoredInMemoryOnly: false)
 
     init() {

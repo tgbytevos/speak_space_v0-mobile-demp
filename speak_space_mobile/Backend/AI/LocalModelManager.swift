@@ -77,6 +77,12 @@ enum LocalModelState: Equatable, Sendable {
     }
 }
 
+enum LocalModelSelection {
+    nonisolated static func next(activeID: String?, tappedID: String) -> String? {
+        activeID == tappedID ? nil : tappedID
+    }
+}
+
 @MainActor
 final class LocalModelManager: NSObject, ObservableObject {
     nonisolated static let activeModelKey = "activeLocalModelID"
@@ -138,8 +144,12 @@ final class LocalModelManager: NSObject, ObservableObject {
 
     func select(_ model: LocalModelDescriptor) {
         guard state(for: model).isInstalled else { return }
-        activeModelID = model.id
-        UserDefaults.standard.set(model.id, forKey: Self.activeModelKey)
+        activeModelID = LocalModelSelection.next(activeID: activeModelID, tappedID: model.id)
+        if let activeModelID {
+            UserDefaults.standard.set(activeModelID, forKey: Self.activeModelKey)
+        } else {
+            UserDefaults.standard.removeObject(forKey: Self.activeModelKey)
+        }
     }
 
     func download(_ model: LocalModelDescriptor) {

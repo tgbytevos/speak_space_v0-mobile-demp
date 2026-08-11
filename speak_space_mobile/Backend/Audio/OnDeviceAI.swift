@@ -36,6 +36,11 @@ enum NoteGenerationType: String, Sendable {
     var progressLabel: String { self == .summary ? "summary" : "to-do list" }
 }
 
+struct AskExchange: Sendable {
+    let question: String
+    let answer: String
+}
+
 @MainActor
 final class OnDevicePipeline: ObservableObject {
     enum Phase: Equatable {
@@ -213,6 +218,14 @@ final class OnDevicePipeline: ObservableObject {
         } catch {
             textModelRuntimeFailed = true
             throw error
+        }
+    }
+
+    func answer(question: String, evidence: [String], history: [AskExchange] = []) async throws -> String {
+        phase = .generating
+        defer { phase = .idle }
+        return try await withModelTimeout(seconds: 90) {
+            try await LocalLlamaEngine.shared.answer(question: question, evidence: evidence, history: history)
         }
     }
 
